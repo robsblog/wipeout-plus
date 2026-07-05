@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdlib.h>
 
 #include "../mem.h"
 #include "../utils.h"
@@ -860,6 +861,13 @@ void game_init(void) {
 	render_set_resolution(save.screen_res);
 	render_set_post_effect(save.post_effect);
 	render_set_metallic_shimmer(save.metallic_shimmer);
+	// Dev override: WIPEOUT_SHIMMER=0/1 forces the effect off/on for A/B tests.
+	{
+		const char *sh = getenv("WIPEOUT_SHIMMER");
+		if (sh) {
+			render_set_metallic_shimmer(atoi(sh) != 0);
+		}
+	}
 
 	srand((int)(platform_now() * 100));
 	
@@ -932,7 +940,34 @@ void game_init(void) {
 	}
 
 
-	game_set_scene(GAME_SCENE_INTRO);
+	// Dev convenience:
+	//  WIPEOUT_DEV_RACE  starts a deterministic single race (first installed
+	//                    circuit, chase cam, no credits) for testing/screenshots.
+	//  WIPEOUT_SKIP_INTRO jumps to the title screen (auto-starts attract race).
+	if (getenv("WIPEOUT_DEV_RACE")) {
+		g.is_attract_mode = false;
+		g.pilot = 0;
+		g.circut = 0;
+		for (int c = 0; c < NUM_CIRCUTS; c++) {
+			if (g.installed_circuts[c] && !def.circuts[c].is_bonus_circut) {
+				g.circut = c;
+				break;
+			}
+		}
+		const char *dc = getenv("WIPEOUT_DEV_CIRCUT");
+		if (dc) {
+			g.circut = atoi(dc);
+		}
+		g.race_class = 0;
+		g.race_type = RACE_TYPE_SINGLE;
+		game_set_scene(GAME_SCENE_RACE);
+	}
+	else if (getenv("WIPEOUT_SKIP_INTRO")) {
+		game_set_scene(GAME_SCENE_TITLE);
+	}
+	else {
+		game_set_scene(GAME_SCENE_INTRO);
+	}
 }
 
 void game_set_scene(game_scene_t scene) {
