@@ -91,6 +91,7 @@ section_t *track_nearest_section(vec3_t pos, vec3_t bias, section_t *section, fl
 
 struct camera_t;
 void track_draw(struct camera_t *camera);
+void track_draw_shimmer(struct camera_t *camera);
 
 void track_cycle_pickups(void);
 

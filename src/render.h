@@ -64,8 +64,11 @@ vec3_t render_transform(vec3_t pos);
 void render_push_tris(tris_t tris, uint16_t texture);
 void render_push_sprite(vec3_t pos, vec2i_t size, rgba_t color, uint16_t texture);
 void render_track_shimmer_upload(shimmer_vertex_t *verts, int count);
-void render_track_shimmer_draw(void);
+void render_track_shimmer_begin(void);
+void render_track_shimmer_draw_range(int first_vertex, int vertex_count);
+void render_track_shimmer_end(void);
 void render_set_metallic_shimmer(bool enabled);
+void render_env_cube_capture(void (*draw_env)(void));
 void render_push_2d(vec2i_t pos, vec2i_t size, rgba_t color, uint16_t texture);
 void render_push_2d_tile(vec2i_t pos, vec2i_t uv_offset, vec2i_t uv_size, vec2i_t size, rgba_t color, uint16_t texture_index);
 
@@ -75,5 +78,6 @@ void render_texture_replace_pixels(int16_t texture_index, rgba_t *pixels);
 uint16_t render_textures_len(void);
 void render_textures_reset(uint16_t len);
 void render_textures_dump(const char *path);
+void render_screenshot(const char *path);
 
 #endif

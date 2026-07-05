@@ -49,6 +49,13 @@ void scene_pulsate_red_light(Object *obj);
 void scene_move_oil_pump(Object *obj);
 void scene_update_aurora_borealis(void);
 
+// Draw the sky centered on the origin, for capturing into the environment
+// cube map (the sky model is modeled around the origin).
+static void scene_draw_sky_env(void) {
+	mat4_t m = mat4_identity();
+	object_draw(sky_object, &m);
+}
+
 void scene_load(const char *base_path, float sky_y_offset) {
 	bool multiplayer = false;
 	if (def.circuts[g.circut].release == GAME_WIPEOUT_64) {
@@ -116,6 +123,9 @@ void scene_load(const char *base_path, float sky_y_offset) {
 	}
 
 	aurora_borealis.enabled = false;
+
+	// Capture the sky into the environment cube map for the track shimmer.
+	render_env_cube_capture(scene_draw_sky_env);
 }
 
 void scene_init(void) {

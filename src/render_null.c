@@ -22,9 +22,17 @@ void render_track_shimmer_upload(shimmer_vertex_t *verts, int count) {
 	(void) verts;
 	(void) count;
 }
-void render_track_shimmer_draw(void) {}
+void render_track_shimmer_begin(void) {}
+void render_track_shimmer_draw_range(int first_vertex, int vertex_count) {
+	(void) first_vertex;
+	(void) vertex_count;
+}
+void render_track_shimmer_end(void) {}
 void render_set_metallic_shimmer(bool enabled) {
 	(void) enabled;
+}
+void render_env_cube_capture(void (*draw_env)(void)) {
+	(void) draw_env;
 }
 vec2i_t render_size(void) {
 	return vec2i(0, 0);
@@ -96,5 +104,8 @@ void render_textures_reset(uint16_t len) {
 	(void) len;
 }
 void render_textures_dump(const char *path) {
+	(void) path;
+}
+void render_screenshot(const char *path) {
 	(void) path;
 }

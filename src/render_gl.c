@@ -352,34 +352,67 @@ static const char * const SHADER_SHIMMER_VS = SHADER_SOURCE(
 	uniform mat4 view;
 	uniform mat4 model;
 	uniform mat4 projection;
+	uniform vec3 camera_pos;
 
-	varying vec3 v_normal_vs;
-	varying vec3 v_view_dir;
+	varying vec3 v_normal_ws;
+	varying vec3 v_view_dir_ws;
 
 	void main(void) {
 		// Use the exact same transform expression as the game shader so the
 		// depth is bit-identical to the base track pass (avoids z-fighting).
 		gl_Position = projection * view * model * vec4(pos, 1.0);
-		vec4 view_pos = view * model * vec4(pos, 1.0);
-		v_normal_vs = mat3(view[0].xyz, view[1].xyz, view[2].xyz) * normal;
-		v_view_dir = -view_pos.xyz;
+		vec3 world_pos = (model * vec4(pos, 1.0)).xyz;
+		v_normal_ws = mat3(model[0].xyz, model[1].xyz, model[2].xyz) * normal;
+		v_view_dir_ws = camera_pos - world_pos;
 	}
 );
 
 static const char * const SHADER_SHIMMER_FS = SHADER_SOURCE(
-	varying vec3 v_normal_vs;
-	varying vec3 v_view_dir;
+	varying vec3 v_normal_ws;
+	varying vec3 v_view_dir_ws;
 
 	uniform float intensity;
+	uniform samplerCube env;
 
 	void main(void) {
-		vec3 N = normalize(v_normal_vs);
-		vec3 V = normalize(v_view_dir);
-		float ndv = max(dot(N, V), 0.0);
-		float fresnel = pow(1.0 - ndv, 3.0);
-		float shimmer = fresnel * 0.5 + (1.0 - ndv) * 0.15;
-		vec3 metal_tint = vec3(0.55, 0.62, 0.75);
-		gl_FragColor = vec4(metal_tint, shimmer * intensity);
+		vec3 N = normalize(v_normal_ws);
+		vec3 V = normalize(v_view_dir_ws);
+		vec3 R = reflect(-V, N);
+
+		// --- Environment reflection: heavily blurred + desaturated steel sheen.
+		// The wide-spread taps roughen the mirror so bright skies look natural
+		// rather than a sharp wet reflection; the desaturation keeps it reading
+		// as metal (grey) instead of water (coloured). ---
+		vec3 reflected = textureCube(env, R).rgb;
+		reflected += textureCube(env, R + vec3( 0.30, 0.0,  0.0)).rgb;
+		reflected += textureCube(env, R + vec3(-0.30, 0.0,  0.0)).rgb;
+		reflected += textureCube(env, R + vec3( 0.0,  0.30, 0.0)).rgb;
+		reflected += textureCube(env, R + vec3( 0.0, -0.30, 0.0)).rgb;
+		reflected += textureCube(env, R + vec3( 0.0,  0.0,  0.30)).rgb;
+		reflected += textureCube(env, R + vec3( 0.0,  0.0, -0.30)).rgb;
+		reflected *= (1.0 / 7.0);
+		float luma = dot(reflected, vec3(0.299, 0.587, 0.114));
+		reflected = mix(reflected, vec3(luma) * vec3(0.90, 0.95, 1.05), 0.7);
+
+		float NdV = max(dot(N, V), 0.0);
+		// Broad angle response so the reflection is visible across the whole
+		// range of driving angles, not just the steep look-down after a jump.
+		float env_w = 0.30 + 0.50 * (pow(1.0 - NdV, 2.0) + pow(NdV, 1.5));
+
+		// --- Specular highlighting from fixed key lights (Blinn-Phong). Unlike
+		// the reflection this comes from a light, not the environment, so it
+		// still glints on dark tracks and gives the concentrated polished-metal
+		// highlight a pure reflection lacks. World up is -Y. ---
+		vec3 spec = vec3(0.0);
+		vec3 h1 = normalize(normalize(vec3( 0.35, -1.0,  0.25)) + V);
+		spec += vec3(1.00, 0.97, 0.90) * pow(max(dot(N, h1), 0.0), 22.0);
+		vec3 h2 = normalize(normalize(vec3(-0.40, -1.0, -0.30)) + V);
+		spec += vec3(0.85, 0.92, 1.00) * pow(max(dot(N, h2), 0.0), 22.0);
+
+		// Additive blend (SRC_ALPHA, ONE) with alpha = 1: the reflection sheen
+		// plus the specular glints are added to the road.
+		vec3 result = reflected * env_w * 0.7 + spec * 0.9;
+		gl_FragColor = vec4(result * intensity, 1.0);
 	}
 );
 
@@ -392,7 +425,9 @@ typedef struct {
 		GLuint view;
 		GLuint model;
 		GLuint projection;
+		GLuint camera_pos;
 		GLuint intensity;
+		GLuint env;
 	} uniform;
 	struct {
 		GLuint pos;
@@ -400,7 +435,7 @@ typedef struct {
 	} attribute;
 } prg_shimmer_t;
 
-#define SHIMMER_INTENSITY 1.0
+#define SHIMMER_INTENSITY 0.8
 
 static prg_shimmer_t *shader_shimmer_init(void) {
 	prg_shimmer_t *s = mem_bump(sizeof(prg_shimmer_t));
@@ -410,7 +445,9 @@ static prg_shimmer_t *shader_shimmer_init(void) {
 	s->uniform.view = glGetUniformLocation(s->program, "view");
 	s->uniform.model = glGetUniformLocation(s->program, "model");
 	s->uniform.projection = glGetUniformLocation(s->program, "projection");
+	s->uniform.camera_pos = glGetUniformLocation(s->program, "camera_pos");
 	s->uniform.intensity = glGetUniformLocation(s->program, "intensity");
+	s->uniform.env = glGetUniformLocation(s->program, "env");
 
 	s->attribute.pos = glGetAttribLocation(s->program, "pos");
 	s->attribute.normal = glGetAttribLocation(s->program, "normal");
@@ -461,9 +498,18 @@ static GLuint backbuffer = 0;
 static GLuint backbuffer_texture = 0;
 static GLuint backbuffer_depth_buffer = 0;
 
+// Environment cube map: the track sky captured once at load time, sampled by
+// the metallic shimmer pass to produce real reflections.
+#define ENV_CUBE_SIZE 128
+static GLuint env_cube_texture = 0;
+static GLuint env_cube_fbo = 0;
+static GLuint env_cube_depth = 0;
+
 prg_game_t *prg_game;
 static prg_shimmer_t *prg_shimmer = NULL;
 static bool metallic_shimmer_enabled = true;
+static bool shimmer_pass_active = false;
+static vec3_t shimmer_cam_pos;
 prg_post_t *prg_post;
 prg_post_t *prg_post_effects[NUM_RENDER_POST_EFFCTS] = {};
 
@@ -764,6 +810,7 @@ void render_set_view(vec3_t pos, vec3_t angles) {
 	glUniformMatrix4fv(prg_game->uniform.projection, 1, false, projection_mat_3d.m);
 	glUniform3f(prg_game->uniform.camera_pos, pos.x, pos.y, pos.z);
 	glUniform2f(prg_game->uniform.fade, RENDER_FADEOUT_NEAR, RENDER_FADEOUT_FAR);
+	shimmer_cam_pos = pos;
 }
 
 void render_set_view_2d(void) {
@@ -849,10 +896,16 @@ void render_track_shimmer_upload(shimmer_vertex_t *verts, int count) {
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 }
 
-void render_track_shimmer_draw(void) {
+// The shimmer is drawn per visible track section (see track_draw_shimmer) via
+// begin / draw_range* / end. begin sets up the program and GL state once; it
+// clears shimmer_pass_active when the effect is disabled so the range/end calls
+// become no-ops.
+void render_track_shimmer_begin(void) {
+	shimmer_pass_active = false;
 	if (!metallic_shimmer_enabled || !prg_shimmer || prg_shimmer->vertex_count == 0) {
 		return;
 	}
+	shimmer_pass_active = true;
 
 	// Draw any pending game tris (the road etc.) so their depth is written first.
 	render_flush();
@@ -861,16 +914,43 @@ void render_track_shimmer_draw(void) {
 	glUniformMatrix4fv(prg_shimmer->uniform.view, 1, false, view_mat.m);
 	glUniformMatrix4fv(prg_shimmer->uniform.model, 1, false, mat4_identity().m);
 	glUniformMatrix4fv(prg_shimmer->uniform.projection, 1, false, projection_mat_3d.m);
+	glUniform3f(prg_shimmer->uniform.camera_pos, shimmer_cam_pos.x, shimmer_cam_pos.y, shimmer_cam_pos.z);
 	glUniform1f(prg_shimmer->uniform.intensity, SHIMMER_INTENSITY);
+
+	// Bind the captured sky cube map to unit 1; the game uses unit 0 (atlas).
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_CUBE_MAP, env_cube_texture);
+	glUniform1i(prg_shimmer->uniform.env, 1);
+	glActiveTexture(GL_TEXTURE0);
 
 	glDepthMask(false);                 // overlay: don't write depth
 	glDepthFunc(GL_LEQUAL);             // pass at equal depth to the road
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE);  // additive
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE);  // additive metallic highlights
+}
 
-	glDrawArrays(GL_TRIANGLES, 0, prg_shimmer->vertex_count);
+void render_track_shimmer_draw_range(int first_vertex, int vertex_count) {
+	if (!shimmer_pass_active || first_vertex < 0 || vertex_count <= 0) {
+		return;
+	}
+	// Clamp defensively to the uploaded buffer.
+	if (first_vertex + vertex_count > prg_shimmer->vertex_count) {
+		vertex_count = prg_shimmer->vertex_count - first_vertex;
+		if (vertex_count <= 0) {
+			return;
+		}
+	}
 
-	running_stats.num_tris += prg_shimmer->vertex_count / 3;
+	glDrawArrays(GL_TRIANGLES, first_vertex, vertex_count);
+
+	running_stats.num_tris += vertex_count / 3;
 	running_stats.num_draw_calls++;
+}
+
+void render_track_shimmer_end(void) {
+	if (!shimmer_pass_active) {
+		return;
+	}
+	shimmer_pass_active = false;
 
 	// Restore state for subsequent game-program draws (ships, effects, HUD).
 	glDepthFunc(GL_LESS);
@@ -883,10 +963,100 @@ void render_track_shimmer_draw(void) {
 	}
 	use_program(prg_game);
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	glActiveTexture(GL_TEXTURE0);
 }
 
 void render_set_metallic_shimmer(bool enabled) {
 	metallic_shimmer_enabled = enabled;
+}
+
+// gluLookAt-style pure-rotation view matrix (eye at origin, looks down -Z).
+static mat4_t env_cube_view_mat(vec3_t f, vec3_t up) {
+	vec3_t s = vec3_normalize(vec3_cross(f, up));
+	vec3_t u = vec3_cross(s, f);
+	return mat4(
+		 s.x,  u.x, -f.x, 0,
+		 s.y,  u.y, -f.y, 0,
+		 s.z,  u.z, -f.z, 0,
+		 0,    0,    0,    1
+	);
+}
+
+// Capture the environment (the sky) into a cube map centered on the origin.
+// draw_env() must render the surrounding sky with the game program using the
+// currently-set view/projection uniforms (i.e. via object_draw).
+void render_env_cube_capture(void (*draw_env)(void)) {
+	render_flush();
+
+	if (!env_cube_texture) {
+		glGenTextures(1, &env_cube_texture);
+		glBindTexture(GL_TEXTURE_CUBE_MAP, env_cube_texture);
+		for (int i = 0; i < 6; i++) {
+			glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB,
+				ENV_CUBE_SIZE, ENV_CUBE_SIZE, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+		}
+		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+		glGenFramebuffers(1, &env_cube_fbo);
+		glGenRenderbuffers(1, &env_cube_depth);
+		glBindRenderbuffer(GL_RENDERBUFFER, env_cube_depth);
+		glRenderbufferStorage(GL_RENDERBUFFER, RENDER_DEPTH_BUFFER_INTERNAL_FORMAT,
+			ENV_CUBE_SIZE, ENV_CUBE_SIZE);
+	}
+
+	// 90 deg fov, aspect 1 projection (same near/far as the game).
+	float nf = 1.0 / (NEAR_PLANE - FAR_PLANE);
+	mat4_t proj = mat4(
+		1, 0, 0, 0,
+		0, 1, 0, 0,
+		0, 0, (FAR_PLANE + NEAR_PLANE) * nf, -1,
+		0, 0, 2 * FAR_PLANE * NEAR_PLANE * nf, 0
+	);
+
+	// Standard cube-map capture directions (gluLookAt forward + up per face).
+	static const struct { vec3_t f, up; } faces[6] = {
+		{ { 1, 0, 0}, {0, -1,  0} }, // +X
+		{ {-1, 0, 0}, {0, -1,  0} }, // -X
+		{ { 0, 1, 0}, {0,  0,  1} }, // +Y
+		{ { 0,-1, 0}, {0,  0, -1} }, // -Y
+		{ { 0, 0, 1}, {0, -1,  0} }, // +Z
+		{ { 0, 0,-1}, {0, -1,  0} }, // -Z
+	};
+
+	glBindFramebuffer(GL_FRAMEBUFFER, env_cube_fbo);
+	glBindRenderbuffer(GL_RENDERBUFFER, env_cube_depth);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, env_cube_depth);
+	glViewport(0, 0, ENV_CUBE_SIZE, ENV_CUBE_SIZE);
+
+	use_program(prg_game);
+	glBindTexture(GL_TEXTURE_2D, atlas_texture);
+	glActiveTexture(GL_TEXTURE0);
+	glUniformMatrix4fv(prg_game->uniform.projection, 1, false, proj.m);
+	glEnable(GL_DEPTH_TEST);
+	glDepthMask(true);
+
+	for (int i = 0; i < 6; i++) {
+		mat4_t v = env_cube_view_mat(faces[i].f, faces[i].up);
+		glUniformMatrix4fv(prg_game->uniform.view, 1, false, v.m);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+			GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, env_cube_texture, 0);
+		glClearColor(0, 0, 0, 1);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		draw_env();
+		render_flush();
+	}
+
+	// Restore backbuffer target, viewport and the game view/projection.
+	glBindFramebuffer(GL_FRAMEBUFFER, backbuffer);
+	glViewport(0, 0, backbuffer_size.x, backbuffer_size.y);
+	use_program(prg_game);
+	glUniformMatrix4fv(prg_game->uniform.view, 1, false, view_mat.m);
+	glUniformMatrix4fv(prg_game->uniform.projection, 1, false, projection_mat_3d.m);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 }
 
 
@@ -1154,4 +1324,23 @@ void render_textures_dump(const char *path) {
 	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 	stbi_write_png(path, width, height, 4, pixels, 0);
 	free(pixels);
+}
+
+// Dev-only: dump the rendered scene (pre-post-process backbuffer) to a PNG.
+void render_screenshot(const char *path) {
+#if !defined(USE_GLES2) && !defined(__EMSCRIPTEN__)
+	int w = backbuffer_size.x;
+	int h = backbuffer_size.y;
+	rgba_t *pixels = malloc(sizeof(rgba_t) * w * h);
+	glBindTexture(GL_TEXTURE_2D, backbuffer_texture);
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+	stbi_flip_vertically_on_write(1);
+	stbi_write_png(path, w, h, 4, pixels, 0);
+	stbi_flip_vertically_on_write(0);
+	glBindTexture(GL_TEXTURE_2D, atlas_texture);
+	free(pixels);
+	printf("screenshot written: %s (%dx%d)\n", path, w, h);
+#else
+	(void) path;
+#endif
 }

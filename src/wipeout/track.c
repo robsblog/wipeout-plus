@@ -11,26 +11,21 @@
 #include "game.h"
 
 static void track_upload_shimmer(void) {
-	int count = 0;
-	for (int i = 0; i < g.track.face_count; i++) {
-		if (flags_is(g.track.faces[i].flags, FACE_TRACK_BASE)) {
-			count++;
-		}
-	}
+	int count = g.track.face_count;
 	if (count == 0) {
 		// Clear any geometry left over from a previous track.
 		render_track_shimmer_upload(NULL, 0);
 		return;
 	}
 
+	// Upload every track face (road base, guard rails and walls) in face order,
+	// so a section's shimmer verts occupy [face_start*6, face_count*6] and can be
+	// culled per section exactly like track_draw does.
 	int vertex_count = count * 6; // 2 tris * 3 verts per face
 	shimmer_vertex_t *verts = mem_temp_alloc(sizeof(shimmer_vertex_t) * vertex_count);
 	int v = 0;
 	for (int i = 0; i < g.track.face_count; i++) {
 		track_face_t *face = &g.track.faces[i];
-		if (!flags_is(face->flags, FACE_TRACK_BASE)) {
-			continue;
-		}
 		for (int t = 0; t < 2; t++) {
 			for (int k = 0; k < 3; k++) {
 				verts[v].pos = face->tris[t].vertices[k].pos;
@@ -340,6 +335,29 @@ void track_draw(camera_t *camera) {
 			track_draw_section(s);
 		}
 	}
+}
+
+void track_draw_shimmer(camera_t *camera) {
+	// Mirror track_draw's per-section culling so the metallic reflection covers
+	// exactly the visible track (avoids a hard reflection break at the far edge
+	// of the previously ungated single draw).
+	vec3_t cam_pos = camera->position;
+	vec3_t cam_dir = camera_forward(camera);
+
+	render_track_shimmer_begin();
+	for (int32_t i = 0; i < g.track.section_count; i++) {
+		section_t *s = &g.track.sections[i];
+		vec3_t diff = vec3_sub(cam_pos, s->center);
+		float cam_dot = vec3_dot(diff, cam_dir);
+		float dist_sq = vec3_dot(diff, diff);
+		if (
+			cam_dot < 2048 &&
+			dist_sq < (RENDER_FADEOUT_FAR * RENDER_FADEOUT_FAR)
+		) {
+			render_track_shimmer_draw_range(s->face_start * 6, s->face_count * 6);
+		}
+	}
+	render_track_shimmer_end();
 }
 
 void track_cycle_pickups(void) {
