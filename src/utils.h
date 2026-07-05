@@ -80,6 +80,7 @@ int32_t rand_int(int32_t min, int32_t max);
 
 bool file_exists(const char *path);
 uint8_t *file_load(const char *path, uint32_t *bytes_read);
+uint8_t *file_load_optional(const char *path, uint32_t *bytes_read);
 uint32_t file_store(const char *path, void *bytes, int32_t len);
 
 

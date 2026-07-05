@@ -274,6 +274,11 @@ uint8_t *platform_load_asset(const char *name, uint32_t *bytes_read) {
 	return file_load(path, bytes_read);
 }
 
+uint8_t *platform_load_asset_optional(const char *name, uint32_t *bytes_read) {
+	char *path = strcat(strcpy(temp_path, path_assets), name);
+	return file_load_optional(path, bytes_read);
+}
+
 uint8_t *platform_load_userdata(const char *name, uint32_t *bytes_read) {
 	char *path = strcat(strcpy(temp_path, path_userdata), name);
 	if (!file_exists(path)) {

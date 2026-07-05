@@ -43,6 +43,38 @@ uint8_t *file_load(const char *path, uint32_t *bytes_read) {
 	return bytes;
 }
 
+uint8_t *file_load_optional(const char *path, uint32_t *bytes_read) {
+	*bytes_read = 0;
+	FILE *f = fopen(path, "rb");
+	if (!f) {
+		return NULL;
+	}
+
+	fseek(f, 0, SEEK_END);
+	int32_t size = ftell(f);
+	if (size <= 0) {
+		fclose(f);
+		return NULL;
+	}
+	fseek(f, 0, SEEK_SET);
+
+	uint8_t *bytes = mem_temp_alloc(size);
+	if (!bytes) {
+		fclose(f);
+		return NULL;
+	}
+
+	*bytes_read = fread(bytes, 1, size, f);
+	fclose(f);
+
+	if (*bytes_read != (uint32_t)size) {
+		mem_temp_free(bytes);
+		*bytes_read = 0;
+		return NULL;
+	}
+	return bytes;
+}
+
 uint32_t file_store(const char *path, void *bytes, int32_t len) {
 	FILE *f = fopen(path, "wb");
 	error_if(!f, "Could not open file for writing: %s", path);
