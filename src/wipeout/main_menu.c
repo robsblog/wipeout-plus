@@ -303,6 +303,12 @@ static void toggle_post(menu_t *menu, int data) {
 	save.is_dirty = true;
 }
 
+static void toggle_fog(menu_t *menu, int data) {
+	render_set_fog(data);
+	save.fog = data;
+	save.is_dirty = true;
+}
+
 static void toggle_screen_shake(menu_t *menu, int data) {
 	save.screen_shake = (float)data * 0.5;
 	save.is_dirty = true;
@@ -334,6 +340,7 @@ static void page_options_video_init(menu_t *menu) {
 	menu_page_add_toggle(page, save.draw_stats, "DRAW STATS", opts_draw_stats, len(opts_draw_stats), toggle_draw_stats);
 	menu_page_add_toggle(page, save.screen_res, "SCREEN RESOLUTION", opts_res, len(opts_res), toggle_res);
 	menu_page_add_toggle(page, save.post_effect, "POST PROCESSING", opts_post, len(opts_post), toggle_post);
+	menu_page_add_toggle(page, save.fog, "TRACK FOG", opts_off_on, len(opts_off_on), toggle_fog);
 }
 
 // -----------------------------------------------------------------------------

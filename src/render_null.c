@@ -53,6 +53,9 @@ void render_set_blend_mode(render_blend_mode_t mode) {
 void render_set_cull_backface(bool enabled) {
 	(void) enabled;
 }
+void render_set_fog(bool enabled) {
+	(void)enabled;
+}
 
 vec3_t render_transform(vec3_t pos) {
 	return pos;

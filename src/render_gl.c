@@ -357,6 +357,7 @@ static vec2i_t backbuffer_size;
 static uint32_t atlas_map[ATLAS_SIZE] = {0};
 static GLuint atlas_texture = 0;
 static render_blend_mode_t blend_mode = RENDER_BLEND_NORMAL;
+static bool fog_enabled = true;
 
 static mat4_t projection_mat_2d = mat4_identity();
 static mat4_t projection_mat_bb = mat4_identity();
@@ -748,6 +749,9 @@ void render_set_cull_backface(bool enabled) {
 	}
 }
 
+void render_set_fog(bool enabled) {
+	fog_enabled = enabled;
+}
 
 
 

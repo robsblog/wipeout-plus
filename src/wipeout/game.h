@@ -282,6 +282,7 @@ typedef struct {
 	int screen_res;
 	int post_effect;
 	float screen_shake;
+	bool fog;
 
 	uint32_t has_rapier_class;
 	uint32_t has_bonus_circuts;
