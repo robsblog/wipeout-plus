@@ -1018,3 +1018,22 @@ void render_textures_dump(const char *path) {
 	stbi_write_png(path, width, height, 4, pixels, 0);
 	free(pixels);
 }
+
+// Dev-only: dump the rendered scene (pre-post-process backbuffer) to a PNG.
+void render_screenshot(const char *path) {
+#if !defined(USE_GLES2) && !defined(__EMSCRIPTEN__)
+	int w = backbuffer_size.x;
+	int h = backbuffer_size.y;
+	rgba_t *pixels = malloc(sizeof(rgba_t) * w * h);
+	glBindTexture(GL_TEXTURE_2D, backbuffer_texture);
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+	stbi_flip_vertically_on_write(1);
+	stbi_write_png(path, w, h, 4, pixels, 0);
+	stbi_flip_vertically_on_write(0);
+	glBindTexture(GL_TEXTURE_2D, atlas_texture);
+	free(pixels);
+	printf("screenshot written: %s (%dx%d)\n", path, w, h);
+#else
+	(void) path;
+#endif
+}

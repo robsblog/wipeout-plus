@@ -68,5 +68,6 @@ void render_texture_replace_pixels(int16_t texture_index, rgba_t *pixels);
 uint16_t render_textures_len(void);
 void render_textures_reset(uint16_t len);
 void render_textures_dump(const char *path);
+void render_screenshot(const char *path);
 
 #endif

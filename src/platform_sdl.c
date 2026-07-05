@@ -5,6 +5,10 @@
 #include "system.h"
 #include "utils.h"
 #include "mem.h"
+#include "render.h"
+
+#include <stdlib.h>
+#include <stdio.h>
 
 static uint64_t perf_freq = 0;
 static bool wants_to_exit = false;
@@ -416,10 +420,29 @@ int main(int argc, char *argv[]) {
 	platform_video_init();
 	system_init();
 
+	// Dev convenience: WIPEOUT_SHOT_AFTER=<seconds> grabs one screenshot of the
+	// rendered scene into WIPEOUT_SHOT_PATH (default shot.png) and then exits.
+	const char *shot_env = getenv("WIPEOUT_SHOT_AFTER");
+	double shot_after = shot_env ? atof(shot_env) : 0;
+	const char *shot_base = getenv("WIPEOUT_SHOT_PATH");
+	double loop_start = platform_now();
+	double next_shot = shot_after;
+	int shot_count = 0;
+
 	while (!wants_to_exit) {
 		platform_pump_events();
 		platform_prepare_frame();
 		system_update();
+		if (shot_after > 0 && platform_now() - loop_start >= next_shot) {
+			char path[512];
+			snprintf(path, sizeof(path), "%s.%d.png", shot_base ? shot_base : "shot", shot_count);
+			render_screenshot(path);
+			shot_count++;
+			next_shot += 5.0;
+			if (shot_count >= 6) {
+				wants_to_exit = true;
+			}
+		}
 		platform_end_frame();
 	}
 
