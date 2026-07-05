@@ -350,14 +350,17 @@ static const char * const SHADER_SHIMMER_VS = SHADER_SOURCE(
 	attribute vec3 normal;
 
 	uniform mat4 view;
+	uniform mat4 model;
 	uniform mat4 projection;
 
 	varying vec3 v_normal_vs;
 	varying vec3 v_view_dir;
 
 	void main(void) {
-		vec4 view_pos = view * vec4(pos, 1.0);
-		gl_Position = projection * view_pos;
+		// Use the exact same transform expression as the game shader so the
+		// depth is bit-identical to the base track pass (avoids z-fighting).
+		gl_Position = projection * view * model * vec4(pos, 1.0);
+		vec4 view_pos = view * model * vec4(pos, 1.0);
 		v_normal_vs = mat3(view[0].xyz, view[1].xyz, view[2].xyz) * normal;
 		v_view_dir = -view_pos.xyz;
 	}
@@ -387,6 +390,7 @@ typedef struct {
 	int vertex_count;
 	struct {
 		GLuint view;
+		GLuint model;
 		GLuint projection;
 		GLuint intensity;
 	} uniform;
@@ -404,6 +408,7 @@ static prg_shimmer_t *shader_shimmer_init(void) {
 	s->vertex_count = 0;
 
 	s->uniform.view = glGetUniformLocation(s->program, "view");
+	s->uniform.model = glGetUniformLocation(s->program, "model");
 	s->uniform.projection = glGetUniformLocation(s->program, "projection");
 	s->uniform.intensity = glGetUniformLocation(s->program, "intensity");
 
@@ -854,6 +859,7 @@ void render_track_shimmer_draw(void) {
 
 	use_program(prg_shimmer);
 	glUniformMatrix4fv(prg_shimmer->uniform.view, 1, false, view_mat.m);
+	glUniformMatrix4fv(prg_shimmer->uniform.model, 1, false, mat4_identity().m);
 	glUniformMatrix4fv(prg_shimmer->uniform.projection, 1, false, projection_mat_3d.m);
 	glUniform1f(prg_shimmer->uniform.intensity, SHIMMER_INTENSITY);
 
