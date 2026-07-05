@@ -22,6 +22,10 @@ static Object *scene_objects;
 static Object *sky_object;
 static vec3_t sky_offset;
 
+// Automatic fog tint, derived from the sky at load time.
+static rgba_t fog_color_derived = {128, 128, 150, 255};
+rgba_t scene_fog_color(void) { return fog_color_derived; }
+
 static Object *start_booms[SCENE_START_BOOMS_MAX];
 static int start_booms_len;
 
@@ -82,6 +86,44 @@ void scene_load(const char *base_path, float sky_y_offset) {
 	
 	sky_offset = vec3(0, sky_y_offset, 0);
 
+	// Derive the fog tint from the baked vertex colors of the sky model.
+	// Same CPU-side data scene_init_aurora_borealis reads. Falls back to the
+	// neutral default if the sky has no colored (GT3/GT4) primitives.
+	{
+		uint32_t r = 0, g = 0, b = 0, count = 0;
+		Prm poly = {.primitive = sky_object->primitives};
+		for (int i = 0; i < sky_object->primitives_len; i++) {
+			switch (poly.primitive->type) {
+			case PRM_TYPE_GT3:
+				for (int v = 0; v < 3; v++) {
+					r += poly.gt3->color[v].r;
+					g += poly.gt3->color[v].g;
+					b += poly.gt3->color[v].b;
+					count++;
+				}
+				poly.gt3 += 1;
+				break;
+			case PRM_TYPE_GT4:
+				for (int v = 0; v < 4; v++) {
+					r += poly.gt4->color[v].r;
+					g += poly.gt4->color[v].g;
+					b += poly.gt4->color[v].b;
+					count++;
+				}
+				poly.gt4 += 1;
+				break;
+			default:
+				// Sky models are GT3/GT4 only; stop if anything else appears
+				// to avoid a mis-stepped pointer walk.
+				i = sky_object->primitives_len;
+				break;
+			}
+		}
+		if (count > 0) {
+			fog_color_derived = rgba(r / count, g / count, b / count, 255);
+		}
+	}
+
 	// Collect all objects that need to be updated each frame
 	start_booms_len = 0;
 	oil_pumps_len = 0;
@@ -116,6 +158,8 @@ void scene_load(const char *base_path, float sky_y_offset) {
 	}
 
 	aurora_borealis.enabled = false;
+
+	render_set_fog(save.fog, fog_color_derived);
 }
 
 void scene_init(void) {

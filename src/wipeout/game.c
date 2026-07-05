@@ -860,10 +860,14 @@ void game_init(void) {
 	platform_set_fullscreen(save.fullscreen);
 	render_set_resolution(save.screen_res);
 	render_set_post_effect(save.post_effect);
-	render_set_fog(save.fog);
+	render_set_fog(save.fog, rgba(128, 128, 150, 255));
 	const char *fog_env = getenv("WIPEOUT_FOG");
 	if (fog_env) {
-		render_set_fog(fog_env[0] == '1');
+		// Debug override: also update the in-memory save flag (not marked
+		// dirty, so it is not persisted) so it survives track load, where
+		// scene_load re-applies save.fog.
+		save.fog = (fog_env[0] == '1');
+		render_set_fog(save.fog, rgba(128, 128, 150, 255));
 	}
 
 	srand((int)(platform_now() * 100));

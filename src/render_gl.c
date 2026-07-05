@@ -125,6 +125,8 @@ static const char * const SHADER_GAME_VS = SHADER_SOURCE(
 
 	varying vec4 v_color;
 	varying vec2 v_uv;
+	varying float v_fog_world_y;
+	varying float v_fog_dist;
 	uniform mat4 view;
 	uniform mat4 model;
 	uniform mat4 projection;
@@ -132,7 +134,7 @@ static const char * const SHADER_GAME_VS = SHADER_SOURCE(
 	uniform vec3 camera_pos;
 	uniform vec2 fade;
 	uniform float time;
-	
+
 	void main(void) {
 		gl_Position = projection * view * model * vec4(pos, 1.0);
 		gl_Position.xy += screen.xy * gl_Position.w;
@@ -142,13 +144,22 @@ static const char * const SHADER_GAME_VS = SHADER_SOURCE(
 			length(vec4(camera_pos, 1.0) - model * vec4(pos, 1.0))
 		);
 		v_uv = uv / 2048.0; // ATLAS_GRID * ATLAS_SIZE
+
+		// world-space position for fog
+		vec4 world_pos = model * vec4(pos, 1.0);
+		v_fog_world_y = world_pos.y;
+		v_fog_dist = length(vec4(camera_pos, 1.0) - world_pos);
 	}
 );
 
 static const char * const SHADER_GAME_FS = SHADER_SOURCE(
 	varying vec4 v_color;
 	varying vec2 v_uv;
+	varying float v_fog_world_y;
+	varying float v_fog_dist;
 	uniform sampler2D texture;
+	uniform vec3 fog_color;    // per-track tint, 0..1
+	uniform float fog_enabled; // 0.0 or 1.0
 
 	void main(void) {
 		vec4 tex_color = texture2D(texture, v_uv);
@@ -157,6 +168,14 @@ static const char * const SHADER_GAME_FS = SHADER_SOURCE(
 			discard;
 		}
 		color.rgb = color.rgb * 2.0;
+
+		// Ground haze: denser at larger world Y (down low), plus a mild
+		// distance term. Constants are starting values -- tuned later.
+		float height_factor = clamp((v_fog_world_y - 0.0) / 4000.0, 0.0, 1.0);
+		float dist_factor = clamp(v_fog_dist / 48000.0, 0.0, 1.0) * 0.5;
+		float fog_amount = fog_enabled * clamp(height_factor + dist_factor, 0.0, 1.0) * 0.6;
+		color.rgb = mix(color.rgb, fog_color, fog_amount);
+
 		gl_FragColor = color;
 	}
 );
@@ -172,6 +191,8 @@ typedef struct {
 		GLuint camera_pos;
 		GLuint fade;
 		GLuint time;
+		GLuint fog_color;
+		GLuint fog_enabled;
 	} uniform;
 	struct {
 		GLuint pos;
@@ -191,6 +212,8 @@ prg_game_t *shader_game_init(void) {
 	s->uniform.screen = glGetUniformLocation(s->program, "screen");
 	s->uniform.camera_pos = glGetUniformLocation(s->program, "camera_pos");
 	s->uniform.fade = glGetUniformLocation(s->program, "fade");
+	s->uniform.fog_color = glGetUniformLocation(s->program, "fog_color");
+	s->uniform.fog_enabled = glGetUniformLocation(s->program, "fog_enabled");
 
 	s->attribute.pos = glGetAttribLocation(s->program, "pos");
 	s->attribute.uv = glGetAttribLocation(s->program, "uv");
@@ -358,6 +381,7 @@ static uint32_t atlas_map[ATLAS_SIZE] = {0};
 static GLuint atlas_texture = 0;
 static render_blend_mode_t blend_mode = RENDER_BLEND_NORMAL;
 static bool fog_enabled = true;
+static rgba_t fog_color = {128, 128, 128, 255};
 
 static mat4_t projection_mat_2d = mat4_identity();
 static mat4_t projection_mat_bb = mat4_identity();
@@ -675,6 +699,9 @@ void render_set_view(vec3_t pos, vec3_t angles) {
 	glUniformMatrix4fv(prg_game->uniform.projection, 1, false, projection_mat_3d.m);
 	glUniform3f(prg_game->uniform.camera_pos, pos.x, pos.y, pos.z);
 	glUniform2f(prg_game->uniform.fade, RENDER_FADEOUT_NEAR, RENDER_FADEOUT_FAR);
+	glUniform1f(prg_game->uniform.fog_enabled, fog_enabled ? 1.0f : 0.0f);
+	glUniform3f(prg_game->uniform.fog_color,
+		fog_color.r / 255.0f, fog_color.g / 255.0f, fog_color.b / 255.0f);
 }
 
 void render_set_view_2d(void) {
@@ -749,8 +776,9 @@ void render_set_cull_backface(bool enabled) {
 	}
 }
 
-void render_set_fog(bool enabled) {
+void render_set_fog(bool enabled, rgba_t color) {
 	fog_enabled = enabled;
+	fog_color = color;
 }
 
 

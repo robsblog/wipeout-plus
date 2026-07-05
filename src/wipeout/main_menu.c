@@ -8,6 +8,7 @@
 #include "main_menu.h"
 #include "game.h"
 #include "image.h"
+#include "scene.h"
 #include "ui.h"
 
 static void page_main_init(menu_t *menu);
@@ -304,7 +305,7 @@ static void toggle_post(menu_t *menu, int data) {
 }
 
 static void toggle_fog(menu_t *menu, int data) {
-	render_set_fog(data);
+	render_set_fog(data, scene_fog_color());
 	save.fog = data;
 	save.is_dirty = true;
 }
