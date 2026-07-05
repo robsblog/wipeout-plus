@@ -781,6 +781,38 @@ void render_set_fog(bool enabled, rgba_t color) {
 	fog_color = color;
 }
 
+// Lazily create a soft radial-gradient sprite texture used by the fog-volume
+// subsystem. White (neutral 128) RGB, alpha falls off quadratically toward the
+// edge so overlapping puffs blend without hard sprite borders. Created once.
+uint16_t render_fog_texture(void) {
+	#define FOG_TEX_SIZE 64
+	static uint16_t fog_texture_index = 0;
+	static bool created = false;
+	if (created) {
+		return fog_texture_index;
+	}
+
+	rgba_t pixels[FOG_TEX_SIZE * FOG_TEX_SIZE];
+	float center = (FOG_TEX_SIZE - 1) * 0.5f;
+	float radius = FOG_TEX_SIZE * 0.5f;
+	for (int y = 0; y < FOG_TEX_SIZE; y++) {
+		for (int x = 0; x < FOG_TEX_SIZE; x++) {
+			float dx = x - center;
+			float dy = y - center;
+			float r = sqrtf(dx * dx + dy * dy) / radius;
+			float a = 1.0f - r;
+			if (a < 0.0f) { a = 0.0f; }
+			if (a > 1.0f) { a = 1.0f; }
+			a = a * a;
+			pixels[y * FOG_TEX_SIZE + x] = rgba(128, 128, 128, (uint8_t)(a * 255.0f));
+		}
+	}
+	fog_texture_index = render_texture_create(FOG_TEX_SIZE, FOG_TEX_SIZE, pixels);
+	created = true;
+	return fog_texture_index;
+	#undef FOG_TEX_SIZE
+}
+
 
 
 vec3_t render_transform(vec3_t pos) {

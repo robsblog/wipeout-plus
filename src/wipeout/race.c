@@ -18,6 +18,7 @@
 #include "sfx.h"
 #include "race.h"
 #include "particle.h"
+#include "fog.h"
 #include "menu.h"
 #include "ship_ai.h"
 #include "ingame_menus.h"
@@ -37,7 +38,8 @@ void race_init(void) {
 	const circut_settings_t *cs = &def.circuts[g.circut].settings[g.race_class];
 	track_load(cs->path);
 	scene_load(cs->path, cs->sky_y_offset);
-	
+	fog_load();
+
 	if (g.circut == CIRCUT_SILVERSTREAM && g.race_class == RACE_CLASS_RAPIER) {
 		scene_init_aurora_borealis();	
 	} 
@@ -82,6 +84,7 @@ void race_update(void) {
 		camera_update(&g.camera, &g.ships[g.pilot], &g.droid);
 		weapons_update();
 		particles_update();
+		fog_update();
 		scene_update();
 		if (g.race_type != RACE_TYPE_TIME_TRIAL) {
 			track_cycle_pickups();
@@ -115,6 +118,7 @@ void race_update(void) {
 	droid_draw(&g.droid);
 	weapons_draw();
 	particles_draw();
+	fog_draw();
 
 	// Draw 2d
 	render_set_screen_position(vec2(0,0));
@@ -146,6 +150,7 @@ void race_start(void) {
 	ships_init(g.track.sections);
 	droid_init(&g.droid, &g.ships[g.pilot]);
 	particles_init();
+	fog_init();
 	weapons_init();
 
 	for (int i = 0; i < len(g.race_ranks); i++) {

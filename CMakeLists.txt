@@ -52,6 +52,8 @@ set(common_src
 	src/wipeout/camera.h
 	src/wipeout/droid.c
 	src/wipeout/droid.h
+	src/wipeout/fog.c
+	src/wipeout/fog.h
 	src/wipeout/game.c
 	src/wipeout/game.h
 	src/wipeout/hud.c
