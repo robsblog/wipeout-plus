@@ -10,6 +10,37 @@
 #include "object.h"
 #include "game.h"
 
+static void track_upload_shimmer(void) {
+	int count = 0;
+	for (int i = 0; i < g.track.face_count; i++) {
+		if (flags_is(g.track.faces[i].flags, FACE_TRACK_BASE)) {
+			count++;
+		}
+	}
+	if (count == 0) {
+		return;
+	}
+
+	int vertex_count = count * 6; // 2 tris * 3 verts per face
+	shimmer_vertex_t *verts = mem_temp_alloc(sizeof(shimmer_vertex_t) * vertex_count);
+	int v = 0;
+	for (int i = 0; i < g.track.face_count; i++) {
+		track_face_t *face = &g.track.faces[i];
+		if (!flags_is(face->flags, FACE_TRACK_BASE)) {
+			continue;
+		}
+		for (int t = 0; t < 2; t++) {
+			for (int k = 0; k < 3; k++) {
+				verts[v].pos = face->tris[t].vertices[k].pos;
+				verts[v].normal = face->normal;
+				v++;
+			}
+		}
+	}
+	render_track_shimmer_upload(verts, vertex_count);
+	mem_temp_free(verts);
+}
+
 void track_load(const char *base_path) {
 	// Load and assemble high res track tiles
 
@@ -90,6 +121,8 @@ void track_load(const char *base_path) {
 			face++;
 		}
 	}
+
+	track_upload_shimmer();
 }
 
 ttf_t *track_load_tile_format(char *ttf_name) {

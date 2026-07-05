@@ -109,6 +109,7 @@ void race_update(void) {
 	render_set_cull_backface(false);
 	scene_draw(&g.camera);
 	track_draw(&g.camera);
+	render_track_shimmer_draw();
 	render_set_cull_backface(true);
 
 	ships_draw();
