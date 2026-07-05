@@ -18,6 +18,8 @@ static void track_upload_shimmer(void) {
 		}
 	}
 	if (count == 0) {
+		// Clear any geometry left over from a previous track.
+		render_track_shimmer_upload(NULL, 0);
 		return;
 	}
 
