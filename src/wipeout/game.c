@@ -594,6 +594,7 @@ save_t save = {
 	.fullscreen = false,
 	.screen_res = 0,
 	.post_effect = 0,
+	.metallic_shimmer = true,
 
 	.has_rapier_class = true,  // for testing; should be false in prod
 	.has_bonus_circuts = true, // for testing; should be false in prod
@@ -858,6 +859,7 @@ void game_init(void) {
 	platform_set_fullscreen(save.fullscreen);
 	render_set_resolution(save.screen_res);
 	render_set_post_effect(save.post_effect);
+	render_set_metallic_shimmer(save.metallic_shimmer);
 
 	srand((int)(platform_now() * 100));
 	

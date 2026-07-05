@@ -281,6 +281,7 @@ typedef struct {
 	bool fullscreen;
 	int screen_res;
 	int post_effect;
+	bool metallic_shimmer;
 	float screen_shake;
 
 	uint32_t has_rapier_class;
