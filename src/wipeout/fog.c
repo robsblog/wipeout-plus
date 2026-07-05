@@ -19,11 +19,12 @@
 #define FOG_STRAIGHT_SPAN  6     // sections examined for the straightness test
 #define FOG_STRAIGHT_MAX   0.35f // max accumulated heading change (rad) to count as straight
 
+#define FOG_SHIP_HOVER     2000.0f // ships hover ~this far above section center (-Y)
 #define FOG_ZONE_RADIUS    3000.0f // spawn spread / half-extent of a zone
 #define FOG_PUFF_SIZE      4000.0f // base billboard size (world units)
 #define FOG_PUFF_SIZE_VAR  2000.0f // +/- size variation
 
-#define FOG_PUFF_MAX_ALPHA 0.42f   // per-puff peak opacity (0..1); overlap builds up
+#define FOG_PUFF_MAX_ALPHA 0.85f   // per-puff peak opacity (0..1); overlap builds up
 #define FOG_FADE_SPEED     1.5f     // alpha ramp rate toward target (1/s)
 
 // Activation distance: a zone is active when the camera is within this range.
@@ -72,15 +73,18 @@ static float fog_rng_float(float min, float max) {
 	return min + (max - min) * t;
 }
 
-// Fill a zone's puffs at deterministic offsets around its center. Offsets are
-// biased downward (+Y is DOWN) so banks pool near the ground.
+// Fill a zone's puffs at deterministic offsets around its center. Ships fly a
+// hover corridor ~FOG_SHIP_HOVER above the section center (+Y is DOWN, so
+// "above" is -Y); puffs straddle that corridor so you drive THROUGH the bank
+// rather than over a layer buried under the track surface.
 static void fog_zone_spawn_puffs(fog_zone_t *zone) {
 	fog_rng_seed((uint32_t)zone->section_num * 2654435761u + 1u);
 	for (int i = 0; i < FOG_PUFFS_PER_ZONE; i++) {
 		fog_puff_t *p = &zone->puffs[i];
 		float ox = fog_rng_float(-zone->radius, zone->radius);
 		float oz = fog_rng_float(-zone->radius, zone->radius);
-		float oy = fog_rng_float(0.0f, zone->radius * 0.6f); // downward bias
+		// -Y is up: from a bit above the ship down to just under the road.
+		float oy = fog_rng_float(-FOG_SHIP_HOVER - 600.0f, 400.0f);
 		p->home = vec3_add(zone->center, vec3(ox, oy, oz));
 		p->pos  = p->home;
 		p->vel  = vec3(0, 0, 0);
