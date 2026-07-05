@@ -337,8 +337,90 @@ prg_post_t *shader_post_default_init(void) {
 
 prg_post_t *shader_post_crt_init(void) {
 	prg_post_t *s = mem_bump(sizeof(prg_post_t));
-	s->program = create_program(SHADER_POST_VS, SHADER_POST_FS_CRT);	
+	s->program = create_program(SHADER_POST_VS, SHADER_POST_FS_CRT);
 	shader_post_general_init(s);
+	return s;
+}
+
+// -----------------------------------------------------------------------------
+// Track metallic shimmer
+
+static const char * const SHADER_SHIMMER_VS = SHADER_SOURCE(
+	attribute vec3 pos;
+	attribute vec3 normal;
+
+	uniform mat4 view;
+	uniform mat4 projection;
+
+	varying vec3 v_normal_vs;
+	varying vec3 v_view_dir;
+
+	void main(void) {
+		vec4 view_pos = view * vec4(pos, 1.0);
+		gl_Position = projection * view_pos;
+		v_normal_vs = mat3(view[0].xyz, view[1].xyz, view[2].xyz) * normal;
+		v_view_dir = -view_pos.xyz;
+	}
+);
+
+static const char * const SHADER_SHIMMER_FS = SHADER_SOURCE(
+	varying vec3 v_normal_vs;
+	varying vec3 v_view_dir;
+
+	uniform float intensity;
+
+	void main(void) {
+		vec3 N = normalize(v_normal_vs);
+		vec3 V = normalize(v_view_dir);
+		float ndv = max(dot(N, V), 0.0);
+		float fresnel = pow(1.0 - ndv, 3.0);
+		float shimmer = fresnel * 0.5 + (1.0 - ndv) * 0.15;
+		vec3 metal_tint = vec3(0.55, 0.62, 0.75);
+		gl_FragColor = vec4(metal_tint, shimmer * intensity);
+	}
+);
+
+typedef struct {
+	GLuint program;
+	GLuint vao;
+	GLuint vbo;
+	int vertex_count;
+	struct {
+		GLuint view;
+		GLuint projection;
+		GLuint intensity;
+	} uniform;
+	struct {
+		GLuint pos;
+		GLuint normal;
+	} attribute;
+} prg_shimmer_t;
+
+#define SHIMMER_INTENSITY 1.0
+
+static prg_shimmer_t *shader_shimmer_init(void) {
+	prg_shimmer_t *s = mem_bump(sizeof(prg_shimmer_t));
+	s->program = create_program(SHADER_SHIMMER_VS, SHADER_SHIMMER_FS);
+	s->vertex_count = 0;
+
+	s->uniform.view = glGetUniformLocation(s->program, "view");
+	s->uniform.projection = glGetUniformLocation(s->program, "projection");
+	s->uniform.intensity = glGetUniformLocation(s->program, "intensity");
+
+	s->attribute.pos = glGetAttribLocation(s->program, "pos");
+	s->attribute.normal = glGetAttribLocation(s->program, "normal");
+
+	glGenVertexArrays(1, &s->vao);
+	glBindVertexArray(s->vao);
+
+	glGenBuffers(1, &s->vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, s->vbo);
+
+	glEnableVertexAttribArray(s->attribute.pos);
+	glEnableVertexAttribArray(s->attribute.normal);
+	bind_va_f(s->attribute.pos, shimmer_vertex_t, pos, 0);
+	bind_va_f(s->attribute.normal, shimmer_vertex_t, normal, 0);
+
 	return s;
 }
 
@@ -375,6 +457,8 @@ static GLuint backbuffer_texture = 0;
 static GLuint backbuffer_depth_buffer = 0;
 
 prg_game_t *prg_game;
+static prg_shimmer_t *prg_shimmer = NULL;
+static bool metallic_shimmer_enabled = true;
 prg_post_t *prg_post;
 prg_post_t *prg_post_effects[NUM_RENDER_POST_EFFCTS] = {};
 
@@ -440,6 +524,7 @@ void render_init(vec2i_t screen_size) {
 	// Game shader
 
 	prg_game = shader_game_init();
+	prg_shimmer = shader_shimmer_init();
 	use_program(prg_game);
 
 	render_set_view(vec3(0, 0, 0), vec3(0, 0, 0));
@@ -746,6 +831,56 @@ void render_set_cull_backface(bool enabled) {
 	else {
 		glDisable(GL_CULL_FACE);
 	}
+}
+
+void render_track_shimmer_upload(shimmer_vertex_t *verts, int count) {
+	glBindVertexArray(prg_shimmer->vao);
+	glBindBuffer(GL_ARRAY_BUFFER, prg_shimmer->vbo);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(shimmer_vertex_t) * count, verts, GL_STATIC_DRAW);
+	prg_shimmer->vertex_count = count;
+
+	// Restore the game program/VAO and the shared tris buffer binding.
+	use_program(prg_game);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+}
+
+void render_track_shimmer_draw(void) {
+	if (!metallic_shimmer_enabled || !prg_shimmer || prg_shimmer->vertex_count == 0) {
+		return;
+	}
+
+	// Draw any pending game tris (the road etc.) so their depth is written first.
+	render_flush();
+
+	use_program(prg_shimmer);
+	glUniformMatrix4fv(prg_shimmer->uniform.view, 1, false, view_mat.m);
+	glUniformMatrix4fv(prg_shimmer->uniform.projection, 1, false, projection_mat_3d.m);
+	glUniform1f(prg_shimmer->uniform.intensity, SHIMMER_INTENSITY);
+
+	glDepthMask(false);                 // overlay: don't write depth
+	glDepthFunc(GL_LEQUAL);             // pass at equal depth to the road
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE);  // additive
+
+	glDrawArrays(GL_TRIANGLES, 0, prg_shimmer->vertex_count);
+
+	running_stats.num_tris += prg_shimmer->vertex_count / 3;
+	running_stats.num_draw_calls++;
+
+	// Restore state for subsequent game-program draws (ships, effects, HUD).
+	glDepthFunc(GL_LESS);
+	glDepthMask(true);
+	if (blend_mode == RENDER_BLEND_LIGHTER) {
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+	}
+	else {
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	}
+	use_program(prg_game);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+}
+
+void render_set_metallic_shimmer(bool enabled) {
+	metallic_shimmer_enabled = enabled;
 }
 
 

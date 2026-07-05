@@ -25,6 +25,11 @@ typedef struct {
 	uint32_t num_draw_calls;
 } render_stats_t;
 
+typedef struct {
+	vec3_t pos;
+	vec3_t normal;
+} shimmer_vertex_t;
+
 #define RENDER_USE_MIPMAPS 1
 
 #define RENDER_FADEOUT_NEAR 48000.0
@@ -58,6 +63,9 @@ void render_set_cull_backface(bool enabled);
 vec3_t render_transform(vec3_t pos);
 void render_push_tris(tris_t tris, uint16_t texture);
 void render_push_sprite(vec3_t pos, vec2i_t size, rgba_t color, uint16_t texture);
+void render_track_shimmer_upload(shimmer_vertex_t *verts, int count);
+void render_track_shimmer_draw(void);
+void render_set_metallic_shimmer(bool enabled);
 void render_push_2d(vec2i_t pos, vec2i_t size, rgba_t color, uint16_t texture);
 void render_push_2d_tile(vec2i_t pos, vec2i_t uv_offset, vec2i_t uv_size, vec2i_t size, rgba_t color, uint16_t texture_index);
 

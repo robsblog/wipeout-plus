@@ -18,6 +18,14 @@ void render_set_resolution(render_resolution_t res) {
 void render_set_post_effect(render_post_effect_t post) {
 	(void) post;
 }
+void render_track_shimmer_upload(shimmer_vertex_t *verts, int count) {
+	(void) verts;
+	(void) count;
+}
+void render_track_shimmer_draw(void) {}
+void render_set_metallic_shimmer(bool enabled) {
+	(void) enabled;
+}
 vec2i_t render_size(void) {
 	return vec2i(0, 0);
 }
