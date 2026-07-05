@@ -1,5 +1,10 @@
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "../libs/stb_truetype.h"
+
 #include "../render.h"
 #include "../utils.h"
+#include "../platform.h"
+#include "../mem.h"
 
 #include "ui.h"
 #include "image.h"
@@ -53,7 +58,140 @@ char_set_t char_set[UI_SIZE_MAX] = {
 	},
 };
 
+#define UI_TTF_SS 4                 // supersample factor for rasterized glyphs
+#define UI_TTF_FILL 1.15f           // maps font cap/ascent to fill the cell height
+#define UI_TTF_PATH "wipeout/ui-font.ttf"
+#define UI_TTF_ATLAS_MAX_W 1024     // shelf-packing wrap width (px)
+
+typedef struct {
+	vec2i_t offset;   // glyph position within the face texture, supersampled px
+	uint16_t width;   // glyph cell width, supersampled px (= base width * SS)
+} ttf_glyph_t;
+
+typedef struct {
+	uint16_t texture;
+	uint16_t height;  // face cell height, supersampled px (= base height * SS)
+	ttf_glyph_t glyphs[40];
+} ttf_char_set_t;
+
+static bool ui_use_ttf = false;
+static ttf_char_set_t ttf_char_set[UI_SIZE_MAX];
+
+// Inverse of char_to_glyph_index: glyph slot -> Unicode codepoint.
+static int ui_glyph_codepoint(int index) {
+	if (index >= 0 && index <= 25) return 'A' + index;        // 0..25  -> A..Z
+	if (index >= 26 && index <= 35) return '0' + (index - 26); // 26..35 -> 0..9
+	if (index == 36) return ':';
+	if (index == 37) return '.';
+	return 0;                                                  // 38,39 unused
+}
+
 uint16_t icon_textures[UI_ICON_MAX];
+
+// Rasterize one face (all glyphs of one size) into a single atlas texture.
+// Returns false if the glyphs don't fit the packing bounds.
+static bool ui_ttf_rasterize_face(stbtt_fontinfo *font, ui_text_size_t size) {
+	char_set_t *cs = &char_set[size];
+	int base_h = cs->height;
+	int cell_h = base_h * UI_TTF_SS;
+
+	// Shelf-pack cells (one per glyph) into rows no wider than UI_TTF_ATLAS_MAX_W.
+	int pen_x = 0, pen_y = 0, tex_w = 0;
+	for (int i = 0; i < 40; i++) {
+		if (ui_glyph_codepoint(i) == 0) {
+			continue; // unused slot
+		}
+		int cell_w = cs->glyphs[i].width * UI_TTF_SS;
+		if (pen_x + cell_w > UI_TTF_ATLAS_MAX_W) {
+			pen_x = 0;
+			pen_y += cell_h;
+		}
+		ttf_char_set[size].glyphs[i].offset = vec2i(pen_x, pen_y);
+		ttf_char_set[size].glyphs[i].width = cell_w;
+		pen_x += cell_w;
+		if (pen_x > tex_w) {
+			tex_w = pen_x;
+		}
+	}
+	int tex_h = pen_y + cell_h;
+	if (tex_w == 0 || tex_h == 0) {
+		return false;
+	}
+
+	// Transparent RGBA buffer for the whole face.
+	rgba_t *pixels = mem_temp_alloc(sizeof(rgba_t) * tex_w * tex_h);
+	for (int i = 0; i < tex_w * tex_h; i++) {
+		pixels[i] = rgba(255, 255, 255, 0);
+	}
+
+	float scale = stbtt_ScaleForPixelHeight(font, cell_h * UI_TTF_FILL);
+	int ascent, descent, line_gap;
+	stbtt_GetFontVMetrics(font, &ascent, &descent, &line_gap);
+	int baseline = (int)(ascent * scale + 0.5f);
+
+	for (int i = 0; i < 40; i++) {
+		int cp = ui_glyph_codepoint(i);
+		if (cp == 0) {
+			continue;
+		}
+		int cell_w = ttf_char_set[size].glyphs[i].width;
+		int cell_x = ttf_char_set[size].glyphs[i].offset.x;
+		int cell_y = ttf_char_set[size].glyphs[i].offset.y;
+
+		int gw, gh, xoff, yoff;
+		unsigned char *bmp = stbtt_GetCodepointBitmap(font, 0, scale, cp, &gw, &gh, &xoff, &yoff);
+		if (!bmp) {
+			continue; // codepoint not in font; leave cell blank
+		}
+
+		// Horizontally center the glyph in its cell; align to the shared baseline.
+		int gx = cell_x + (cell_w - gw) / 2;
+		int gy = cell_y + baseline + yoff;
+
+		for (int y = 0; y < gh; y++) {
+			int py = gy + y;
+			if (py < cell_y || py >= cell_y + cell_h) continue;
+			for (int x = 0; x < gw; x++) {
+				int px = gx + x;
+				if (px < cell_x || px >= cell_x + cell_w) continue;
+				unsigned char a = bmp[y * gw + x];
+				if (a) {
+					pixels[py * tex_w + px] = rgba(255, 255, 255, a);
+				}
+			}
+		}
+		stbtt_FreeBitmap(bmp, NULL);
+	}
+
+	ttf_char_set[size].height = cell_h;
+	ttf_char_set[size].texture = render_texture_create(tex_w, tex_h, pixels);
+	mem_temp_free(pixels);
+	return true;
+}
+
+static bool ui_ttf_load(void) {
+	uint32_t size_bytes = 0;
+	uint8_t *ttf = platform_load_asset_optional(UI_TTF_PATH, &size_bytes);
+	if (!ttf || size_bytes == 0) {
+		return false;
+	}
+
+	stbtt_fontinfo font;
+	if (!stbtt_InitFont(&font, ttf, stbtt_GetFontOffsetForIndex(ttf, 0))) {
+		mem_temp_free(ttf);
+		return false;
+	}
+
+	bool ok = ui_ttf_rasterize_face(&font, UI_SIZE_16)
+	       && ui_ttf_rasterize_face(&font, UI_SIZE_12)
+	       && ui_ttf_rasterize_face(&font, UI_SIZE_8);
+
+	mem_temp_free(ttf);
+	if (ok) {
+		printf("ui: loaded TTF font from %s (supersample %dx)\n", UI_TTF_PATH, UI_TTF_SS);
+	}
+	return ok;
+}
 
 void ui_load(void) {
 	texture_list_t tl = image_get_compressed_textures("wipeout/textures/drfonts.cmp");
@@ -66,6 +204,8 @@ void ui_load(void) {
 	icon_textures[UI_ICON_END]     = texture_from_list(tl, 7);
 	icon_textures[UI_ICON_DEL]     = texture_from_list(tl, 8);
 	icon_textures[UI_ICON_STAR]    = texture_from_list(tl, 9);
+
+	ui_use_ttf = ui_ttf_load();
 }
 
 int ui_get_scale(void) {
