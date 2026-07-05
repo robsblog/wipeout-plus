@@ -159,6 +159,7 @@ void ship_collide_with_ship(ship_t *self, ship_t *other);
 
 vec3_t ship_cockpit(ship_t *self);
 vec3_t ship_nose(ship_t *self);
+vec3_t ship_exhaust_world(ship_t *self, int i);
 vec3_t ship_wing_left(ship_t *self);
 vec3_t ship_wing_right(ship_t *self);
 

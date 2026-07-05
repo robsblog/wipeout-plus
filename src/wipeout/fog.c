@@ -6,6 +6,7 @@
 
 #include "track.h"
 #include "scene.h"
+#include "ship.h"
 #include "game.h"
 #include "fog.h"
 
@@ -34,6 +35,28 @@
 // home while no external force acts on them).
 #define FOG_SPRING_K       6.0f
 #define FOG_SPRING_DAMPING 0.90f
+
+// --- Ship interaction (Task 4; starting values, final balancing in Task 5) ---
+
+// A ship counts as "near/visible" (worth stirring the fog) when it is within
+// this range of the camera. Squared-distance test against g.camera.position.
+#define FOG_SHIP_NEAR_DIST (RENDER_FADEOUT_NEAR * 0.5f)
+
+// Turbulence: a ship pushes puffs it drives near. Kick direction is the outward
+// direction (puff away from ship) blended with the ship's forward, so puffs get
+// shoved aside and trail behind. Scaled by proximity; the spring pulls them back.
+#define FOG_PUSH_RADIUS    4000.0f  // ship influences puffs within this range
+#define FOG_PUSH_ACCEL     60000.0f // kick acceleration at zero distance (u/s^2)
+#define FOG_PUSH_FWD_BLEND 0.5f     // 0 = pure outward, 1 = pure ship-forward
+#define FOG_PUSH_MAX_DISP  3000.0f  // clamp puff displacement from home (u)
+
+// Additive thruster glow sprites at the exhaust mounts.
+#define FOG_GLOW_SIZE        700.0f  // base halo size (world units)
+#define FOG_GLOW_THRUST_SCALE 0.6f   // extra size per unit of thrust_mag
+#define FOG_GLOW_ALPHA       0.45f   // additive brightness (0..1)
+#define FOG_GLOW_R           255     // warm engine tint
+#define FOG_GLOW_G           170
+#define FOG_GLOW_B           90
 
 typedef struct {
 	vec3_t home;         // rest position
@@ -220,10 +243,32 @@ void fog_init(void) {
 	}
 }
 
+// True if a ship is close enough to the camera to interact with the fog.
+static bool fog_ship_is_near(ship_t *ship) {
+	float near_sq = FOG_SHIP_NEAR_DIST * FOG_SHIP_NEAR_DIST;
+	vec3_t d = vec3_sub(g.camera.position, ship->position);
+	return vec3_len_sq(d) < near_sq;
+}
+
+// Gather pointers to the near/visible ships. Returns the count.
+static int fog_gather_near_ships(ship_t **out) {
+	int count = 0;
+	for (int i = 0; i < NUM_PILOTS; i++) {
+		if (fog_ship_is_near(&g.ships[i])) {
+			out[count++] = &g.ships[i];
+		}
+	}
+	return count;
+}
+
 void fog_update(void) {
 	float dt = (float)system_tick();
 	float activate_sq = FOG_ACTIVATE_DIST * FOG_ACTIVATE_DIST;
 	vec3_t cam = g.camera.position;
+
+	// Ships that are close enough to stir the fog (computed once per frame).
+	ship_t *near_ships[NUM_PILOTS];
+	int near_count = fog_gather_near_ships(near_ships);
 
 	for (int i = 0; i < fog_zone_count; i++) {
 		fog_zone_t *zone = &fog_zones[i];
@@ -235,11 +280,43 @@ void fog_update(void) {
 			fog_puff_t *p = &zone->puffs[j];
 			p->alpha_target = target;
 
-			// Spring back toward home (no external force yet -- Task 4).
+			// Turbulence: nearby ships shove the puffs aside before the spring
+			// integrates. Direction = outward (puff away from ship) blended with
+			// the ship's forward, scaled by proximity. Only for active zones.
+			if (zone->active) {
+				for (int s = 0; s < near_count; s++) {
+					ship_t *ship = near_ships[s];
+					vec3_t away = vec3_sub(p->pos, ship->position);
+					float dist = vec3_len(away);
+					if (dist >= FOG_PUSH_RADIUS || dist < 0.0001f) {
+						continue;
+					}
+					float proximity = 1.0f - (dist / FOG_PUSH_RADIUS);
+					vec3_t out_dir = vec3_mulf(away, 1.0f / dist);
+					vec3_t fwd = vec3_normalize(
+						vec3_sub(ship_nose(ship), ship->position));
+					vec3_t dir = vec3_normalize(vec3_add(
+						vec3_mulf(out_dir, 1.0f - FOG_PUSH_FWD_BLEND),
+						vec3_mulf(fwd, FOG_PUSH_FWD_BLEND)));
+					float accel = FOG_PUSH_ACCEL * proximity * proximity;
+					p->vel = vec3_add(p->vel, vec3_mulf(dir, accel * dt));
+				}
+			}
+
+			// Spring back toward home (turbulence above pushed it away).
 			vec3_t to_home = vec3_sub(p->home, p->pos);
 			p->vel = vec3_add(p->vel, vec3_mulf(to_home, FOG_SPRING_K * dt));
 			p->vel = vec3_mulf(p->vel, FOG_SPRING_DAMPING);
 			p->pos = vec3_add(p->pos, vec3_mulf(p->vel, dt));
+
+			// Clamp displacement so puffs stay within their zone even under a
+			// hard turbulence kick.
+			vec3_t disp = vec3_sub(p->pos, p->home);
+			float disp_len = vec3_len(disp);
+			if (disp_len > FOG_PUSH_MAX_DISP) {
+				p->pos = vec3_add(p->home,
+					vec3_mulf(disp, FOG_PUSH_MAX_DISP / disp_len));
+			}
 
 			// Ramp alpha toward target.
 			p->alpha += (p->alpha_target - p->alpha) * FOG_FADE_SPEED * dt;
@@ -277,6 +354,26 @@ void fog_draw(void) {
 			rgba_t color = rgba(base.r, base.g, base.b, a);
 			int s = (int)p->size;
 			render_push_sprite(p->pos, vec2i(s, s), color, tex);
+		}
+	}
+
+	// Additive thruster glow: warm halos at each ship's exhaust mounts. These
+	// brighten and tint whatever fog they sit in. Only near/visible ships.
+	render_set_blend_mode(RENDER_BLEND_LIGHTER);
+	uint8_t glow_a = (uint8_t)(FOG_GLOW_ALPHA * 255.0f);
+	for (int i = 0; i < NUM_PILOTS; i++) {
+		ship_t *ship = &g.ships[i];
+		if (!fog_ship_is_near(ship)) {
+			continue;
+		}
+		int glow_size = (int)(FOG_GLOW_SIZE + ship->thrust_mag * FOG_GLOW_THRUST_SCALE);
+		rgba_t glow = rgba(FOG_GLOW_R, FOG_GLOW_G, FOG_GLOW_B, glow_a);
+		for (int e = 0; e < 3; e++) {
+			if (ship->exhaust_plume[e].v == NULL) {
+				continue;
+			}
+			render_push_sprite(ship_exhaust_world(ship, e),
+				vec2i(glow_size, glow_size), glow, tex);
 		}
 	}
 
