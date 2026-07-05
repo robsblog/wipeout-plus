@@ -326,15 +326,28 @@ void ui_draw_text(const char *text, vec2i_t pos, ui_text_size_t size, rgba_t col
 	char_set_t *cs = &char_set[size];
 
 	for (int i = 0; text[i] != 0; i++) {
-		if (text[i] != ' ') {
-			glyph_t *glyph = &cs->glyphs[char_to_glyph_index(text[i])];
-			vec2i_t size = vec2i(glyph->width, cs->height);
-			render_push_2d_tile(pos, glyph->offset, size, ui_scaled(size), color, cs->texture);
-			pos.x += glyph->width * ui_scale;
+		if (text[i] == ' ') {
+			pos.x += 8 * ui_scale;
+			continue;
+		}
+
+		int idx = char_to_glyph_index(text[i]);
+		int base_w = cs->glyphs[idx].width;
+
+		if (ui_use_ttf) {
+			ttf_char_set_t *ts = &ttf_char_set[size];
+			vec2i_t src_offset = ts->glyphs[idx].offset;
+			vec2i_t src_size = vec2i(ts->glyphs[idx].width, ts->height);
+			vec2i_t disp_size = vec2i(base_w * ui_scale, cs->height * ui_scale);
+			render_push_2d_tile(pos, src_offset, src_size, disp_size, color, ts->texture);
 		}
 		else {
-			pos.x += 8 * ui_scale;
+			glyph_t *glyph = &cs->glyphs[idx];
+			vec2i_t glyph_size = vec2i(glyph->width, cs->height);
+			render_push_2d_tile(pos, glyph->offset, glyph_size, ui_scaled(glyph_size), color, cs->texture);
 		}
+
+		pos.x += base_w * ui_scale;
 	}
 }
 
