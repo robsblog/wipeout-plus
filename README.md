@@ -234,6 +234,15 @@ The following is a table for project specific build flags using CMake:
 
 This repository does not contain the assets (textures, 3d models etc.) required to run the game. This code mostly assumes to have the PSX NTSC data, but some menu models from the PC version are required as well. Both of these can be easily found on archive.org and similar sites. The music (optional) needs to be provided in [QOA format](https://github.com/phoboslab/qoa). The intro video as MPEG1.
 
+### Sharper UI text (optional)
+
+The menu and HUD text is a low-resolution bitmap font by default, which looks
+blocky when scaled up on high-resolution displays. If you place a TrueType font
+at `wipeout/ui-font.ttf`, it will be rasterized and used for all UI text instead,
+staying crisp at any scale. If the file is absent, the built-in bitmap font is
+used unchanged. Any `.ttf` works; a recreation of the original wipEout typeface
+gives the most authentic result.
+
 The directory structure is assumed to be as follows
 
 ```
