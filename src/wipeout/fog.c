@@ -13,25 +13,26 @@
 // --- Tuning (starting values; final balancing happens in Task 5) -------------
 
 #define FOG_MAX_ZONES      18    // hard cap on selected zones
-#define FOG_PUFFS_PER_ZONE 72    // billboards per zone; many overlapping = continuous swath
-#define FOG_MIN_SPACING    12    // sections skipped after a pick (keeps zones sparse)
+#define FOG_PUFFS_PER_ZONE 96    // billboards per zone; many overlapping = continuous swath
+#define FOG_MIN_SPACING    8     // section gap after a zone run (keeps zones sparse)
 
 #define FOG_DIP_WINDOW     3     // +/- sections for the local-maximum-of-y test
 #define FOG_STRAIGHT_SPAN  6     // sections examined for the straightness test
 #define FOG_STRAIGHT_MAX   0.35f // max accumulated heading change (rad) to count as straight
 
-// A zone is a swath stretched ALONG the track (not a point), so a bank covers a
-// whole stretch and reads as continuous drifting fog rather than speckled dots.
-#define FOG_SHIP_HOVER     2000.0f  // ships hover ~this far above section center (-Y)
-#define FOG_ZONE_LENGTH    30000.0f // extent along the track direction (long swath)
-#define FOG_ZONE_WIDTH     3600.0f  // lateral half-extent (across the track)
-#define FOG_GROUND_RISE    1300.0f  // how far the fog rises above the road (-Y) -- kept low/flat
-#define FOG_GROUND_SINK    500.0f   // how far it sinks below the road (+Y)
-#define FOG_ZONE_RADIUS    (FOG_ZONE_LENGTH * 0.5f) // used for activation radius
-#define FOG_PUFF_SIZE      5400.0f  // base billboard size (world units)
-#define FOG_PUFF_SIZE_VAR  1600.0f  // +/- size variation
+// A zone is a run of consecutive sections; each puff is anchored to the actual
+// track SURFACE under it (base face), so the fog is a thin, dense, flat layer
+// that hugs the road as it rises/curves -- true ground fog the ships cut through
+// (they hover only ~220u above the surface). +Y is DOWN, so "above" is -Y.
+#define FOG_ZONE_SECTIONS  22      // consecutive sections a fog run spans
+#define FOG_ZONE_WIDTH     3400.0f // lateral half-extent (across the track)
+#define FOG_ALONG_JITTER   1800.0f // along-track scatter around each sampled section
+#define FOG_GROUND_RISE    950.0f  // how far the fog rises above the road (-Y) -- thin/flat
+#define FOG_GROUND_SINK    150.0f  // how far it dips below the road surface (+Y)
+#define FOG_PUFF_SIZE      5200.0f // base billboard size (world units)
+#define FOG_PUFF_SIZE_VAR  1500.0f // +/- size variation
 
-#define FOG_PUFF_MAX_ALPHA 0.20f   // low per-puff opacity; the dense overlap diffuses into a wash
+#define FOG_PUFF_MAX_ALPHA 0.26f   // per-puff opacity; dense low overlap = defined ground layer
 #define FOG_FADE_SPEED     1.5f     // alpha ramp rate toward target (1/s)
 
 // Activation distance: a zone is active when the camera is within this range.
@@ -103,29 +104,13 @@ static float fog_rng_float(float min, float max) {
 	return min + (max - min) * t;
 }
 
-// Fill a zone's puffs, distributed ALONG the track direction (a stretched
-// swath, not a ball) with lateral spread and a ground-weighted height so the
-// bank reads as continuous ground fog the ship drives through. +Y is DOWN, so
-// the fog rises toward -Y and is densest near the road (t*t weighting).
-static void fog_zone_spawn_puffs(fog_zone_t *zone) {
-	fog_rng_seed((uint32_t)zone->section_num * 2654435761u + 1u);
-	// Lateral (across-track) axis: forward x world-up. forward is ~horizontal.
-	vec3_t lateral = vec3_normalize(vec3_cross(zone->forward, vec3(0, 1, 0)));
-	for (int i = 0; i < FOG_PUFFS_PER_ZONE; i++) {
-		fog_puff_t *p = &zone->puffs[i];
-		float along = fog_rng_float(-FOG_ZONE_LENGTH * 0.5f, FOG_ZONE_LENGTH * 0.5f);
-		float lat   = fog_rng_float(-FOG_ZONE_WIDTH, FOG_ZONE_WIDTH);
-		float t     = fog_rng_float(0.0f, 1.0f);
-		float oy    = FOG_GROUND_SINK - FOG_GROUND_RISE * (t * t); // ground-weighted
-		p->home = vec3_add(zone->center,
-			vec3_add(vec3_mulf(zone->forward, along),
-				vec3_add(vec3_mulf(lateral, lat), vec3(0, oy, 0))));
-		p->pos  = p->home;
-		p->vel  = vec3(0, 0, 0);
-		p->size = FOG_PUFF_SIZE + fog_rng_float(-FOG_PUFF_SIZE_VAR, FOG_PUFF_SIZE_VAR);
-		p->alpha = 0.0f;
-		p->alpha_target = 0.0f;
-	}
+// Average Y of a section's drivable base face -- the actual road surface height
+// at that point (+Y is DOWN). The fog anchors to this, not section->center.
+static float fog_surface_y(section_t *s) {
+	track_face_t *bf = track_section_get_base_face(s);
+	return (bf->tris[0].vertices[0].pos.y +
+	        bf->tris[0].vertices[1].pos.y +
+	        bf->tris[0].vertices[2].pos.y) / 3.0f;
 }
 
 // Heading of a section: normalized direction to the next section center.
@@ -138,17 +123,46 @@ static vec3_t fog_section_heading(section_t *s) {
 	return vec3_mulf(d, 1.0f / len);
 }
 
-static void fog_add_zone(section_t *s) {
+// Add a fog run spanning [start, start+span) sections of the ordered list.
+// Each puff is placed at a randomly sampled section in the run, anchored to that
+// section's road surface with lateral + along-track scatter and a ground-weighted
+// height, so the whole run reads as one flat layer following the road.
+static void fog_add_zone(section_t **ordered, int n, int start, int span) {
 	if (fog_zone_count >= FOG_MAX_ZONES) {
 		return;
 	}
 	fog_zone_t *zone = &fog_zones[fog_zone_count++];
-	zone->center = s->center;
-	zone->forward = fog_section_heading(s);
-	zone->radius = FOG_ZONE_RADIUS;
-	zone->section_num = s->num;
+	int mid = start + span / 2;
+	if (mid >= n) { mid = n - 1; }
+	zone->center = ordered[mid]->center;      // activation anchor (mid of run)
+	zone->forward = fog_section_heading(ordered[mid]);
+	zone->radius = 0.0f;
+	zone->section_num = ordered[start]->num;
 	zone->active = false;
-	fog_zone_spawn_puffs(zone);
+
+	fog_rng_seed((uint32_t)zone->section_num * 2654435761u + 1u);
+	for (int i = 0; i < FOG_PUFFS_PER_ZONE; i++) {
+		fog_puff_t *p = &zone->puffs[i];
+		int k = start + (int)fog_rng_float(0.0f, (float)span);
+		if (k >= n) { k = n - 1; }
+		section_t *sec = ordered[k];
+		vec3_t fwd = fog_section_heading(sec);
+		vec3_t lateral = vec3_normalize(vec3_cross(fwd, vec3(0, 1, 0)));
+		float along = fog_rng_float(-FOG_ALONG_JITTER, FOG_ALONG_JITTER);
+		float lat   = fog_rng_float(-FOG_ZONE_WIDTH, FOG_ZONE_WIDTH);
+		float t     = fog_rng_float(0.0f, 1.0f);
+		float oy    = FOG_GROUND_SINK - FOG_GROUND_RISE * (t * t); // ground-weighted (-Y up)
+
+		vec3_t base = sec->center;
+		base.y = fog_surface_y(sec) + oy;     // anchor to the actual road surface
+		p->home = vec3_add(base,
+			vec3_add(vec3_mulf(fwd, along), vec3_mulf(lateral, lat)));
+		p->pos  = p->home;
+		p->vel  = vec3(0, 0, 0);
+		p->size = FOG_PUFF_SIZE + fog_rng_float(-FOG_PUFF_SIZE_VAR, FOG_PUFF_SIZE_VAR);
+		p->alpha = 0.0f;
+		p->alpha_target = 0.0f;
+	}
 }
 
 void fog_load(void) {
@@ -221,10 +235,10 @@ void fog_load(void) {
 
 		bool qualified = (is_dip || is_straight);
 
-		// Rising edge + cooldown gate: place at most one zone per region.
+		// Rising edge + cooldown gate: start one fog run per qualifying region.
 		if (qualified && !prev_qualified && cooldown <= 0) {
-			fog_add_zone(cur);
-			cooldown = FOG_MIN_SPACING;
+			fog_add_zone(ordered, n, i, FOG_ZONE_SECTIONS);
+			cooldown = FOG_ZONE_SECTIONS + FOG_MIN_SPACING;
 		}
 		if (cooldown > 0) {
 			cooldown--;
