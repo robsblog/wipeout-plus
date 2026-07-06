@@ -27,21 +27,26 @@
 #define FOG_ZONE_SECTIONS  22      // consecutive sections a fog run spans
 #define FOG_ZONE_WIDTH     3400.0f // lateral half-extent (across the track)
 #define FOG_ALONG_JITTER   1800.0f // along-track scatter around each sampled section
-#define FOG_GROUND_RISE    950.0f  // how far the fog rises above the road (-Y) -- thin/flat
+#define FOG_GROUND_RISE    800.0f  // max rise above the road (-Y); t^3 keeps most puffs low
 #define FOG_GROUND_SINK    150.0f  // how far it dips below the road surface (+Y)
-#define FOG_PUFF_SIZE      5200.0f // base billboard size (world units)
+#define FOG_PUFF_SIZE      5000.0f // base billboard size (world units)
 #define FOG_PUFF_SIZE_VAR  1500.0f // +/- size variation
 
-#define FOG_PUFF_MAX_ALPHA 0.26f   // per-puff opacity; dense low overlap = defined ground layer
+#define FOG_PUFF_MAX_ALPHA 0.32f   // per-puff opacity of a low puff; high puffs fade out
 #define FOG_FADE_SPEED     1.5f     // alpha ramp rate toward target (1/s)
+
+// A passing ship punches a transient hole in the fog (a visible wake/cut) that
+// refills over ~1/DECAY seconds.
+#define FOG_CARVE_RADIUS   3200.0f // ship carves puffs within this range
+#define FOG_DISTURB_DECAY  1.3f    // how fast the hole refills (1/s)
 
 // Activation distance: a zone is active when the camera is within this range.
 #define FOG_ACTIVATE_DIST  (RENDER_FADEOUT_NEAR)
 
 // Spring parameters: soft + slow to settle so a ship's wake stays visible for a
 // moment before the fog closes back in.
-#define FOG_SPRING_K       2.5f
-#define FOG_SPRING_DAMPING 0.88f
+#define FOG_SPRING_K       1.6f
+#define FOG_SPRING_DAMPING 0.90f
 
 // --- Ship interaction (Task 4; starting values, final balancing in Task 5) ---
 
@@ -57,10 +62,14 @@
 #define FOG_PUSH_FWD_BLEND 0.45f    // 0 = pure outward, 1 = pure ship-forward
 #define FOG_PUSH_MAX_DISP  6000.0f  // clamp puff displacement from home (u)
 
-// Additive thruster glow sprites at the exhaust mounts.
-#define FOG_GLOW_SIZE        420.0f  // base halo size (world units)
-#define FOG_GLOW_THRUST_SCALE 0.30f  // extra size per unit of thrust_mag
-#define FOG_GLOW_ALPHA       0.38f   // additive brightness (0..1)
+// Additive thruster glow at the exhaust mounts: a bright concentrated core plus
+// a softer halo, so it reads as a light illuminating the fog rather than a soft
+// wash. Sizes grow slightly with thrust.
+#define FOG_GLOW_CORE_SIZE   340.0f  // bright inner core
+#define FOG_GLOW_CORE_ALPHA  0.70f
+#define FOG_GLOW_HALO_SIZE   820.0f  // soft outer halo
+#define FOG_GLOW_HALO_ALPHA  0.30f
+#define FOG_GLOW_THRUST_SCALE 0.28f  // extra size per unit of thrust_mag
 #define FOG_GLOW_R           255     // warm engine tint
 #define FOG_GLOW_G           170
 #define FOG_GLOW_B           90
@@ -70,8 +79,10 @@ typedef struct {
 	vec3_t pos;          // current position
 	vec3_t vel;          // current velocity
 	float  size;         // billboard size (world units)
-	float  alpha;        // current opacity 0..1
+	float  base_alpha;   // this puff's full opacity (lower puffs are denser)
+	float  alpha;        // current opacity 0..1 (fades with zone activation)
 	float  alpha_target; // target opacity 0..1
+	float  disturb;      // 0..1 transient carve: a passing ship punches a hole
 } fog_puff_t;
 
 typedef struct {
@@ -151,7 +162,7 @@ static void fog_add_zone(section_t **ordered, int n, int start, int span) {
 		float along = fog_rng_float(-FOG_ALONG_JITTER, FOG_ALONG_JITTER);
 		float lat   = fog_rng_float(-FOG_ZONE_WIDTH, FOG_ZONE_WIDTH);
 		float t     = fog_rng_float(0.0f, 1.0f);
-		float oy    = FOG_GROUND_SINK - FOG_GROUND_RISE * (t * t); // ground-weighted (-Y up)
+		float oy    = FOG_GROUND_SINK - FOG_GROUND_RISE * (t * t * t); // t^3: most puffs hug the road, few rise
 
 		vec3_t base = sec->center;
 		base.y = fog_surface_y(sec) + oy;     // anchor to the actual road surface
@@ -160,8 +171,10 @@ static void fog_add_zone(section_t **ordered, int n, int start, int span) {
 		p->pos  = p->home;
 		p->vel  = vec3(0, 0, 0);
 		p->size = FOG_PUFF_SIZE + fog_rng_float(-FOG_PUFF_SIZE_VAR, FOG_PUFF_SIZE_VAR);
+		p->base_alpha = FOG_PUFF_MAX_ALPHA * (1.0f - 0.5f * t); // denser near the road
 		p->alpha = 0.0f;
 		p->alpha_target = 0.0f;
+		p->disturb = 0.0f;
 	}
 }
 
@@ -265,6 +278,7 @@ void fog_init(void) {
 			p->vel = vec3(0, 0, 0);
 			p->alpha = 0.0f;
 			p->alpha_target = 0.0f;
+			p->disturb = 0.0f;
 		}
 	}
 }
@@ -301,14 +315,18 @@ void fog_update(void) {
 		vec3_t diff = vec3_sub(cam, zone->center);
 		zone->active = (vec3_len_sq(diff) < activate_sq);
 
-		float target = zone->active ? FOG_PUFF_MAX_ALPHA : 0.0f;
 		for (int j = 0; j < FOG_PUFFS_PER_ZONE; j++) {
 			fog_puff_t *p = &zone->puffs[j];
-			p->alpha_target = target;
+			p->alpha_target = zone->active ? p->base_alpha : 0.0f;
+
+			// The carve hole refills over time.
+			p->disturb -= FOG_DISTURB_DECAY * dt;
+			if (p->disturb < 0.0f) { p->disturb = 0.0f; }
 
 			// Turbulence: nearby ships shove the puffs aside before the spring
-			// integrates. Direction = outward (puff away from ship) blended with
-			// the ship's forward, scaled by proximity. Only for active zones.
+			// integrates, and punch a transient hole (disturb) for a visible cut.
+			// Direction = outward (puff away from ship) blended with the ship's
+			// forward, scaled by proximity. Only for active zones.
 			if (zone->active) {
 				for (int s = 0; s < near_count; s++) {
 					ship_t *ship = near_ships[s];
@@ -326,6 +344,12 @@ void fog_update(void) {
 						vec3_mulf(fwd, FOG_PUSH_FWD_BLEND)));
 					float accel = FOG_PUSH_ACCEL * proximity * proximity;
 					p->vel = vec3_add(p->vel, vec3_mulf(dir, accel * dt));
+
+					// Carve: close passes clear the fog, leaving a wake.
+					if (dist < FOG_CARVE_RADIUS) {
+						float carve = 1.0f - (dist / FOG_CARVE_RADIUS);
+						if (carve > p->disturb) { p->disturb = carve; }
+					}
 				}
 			}
 
@@ -373,10 +397,11 @@ void fog_draw(void) {
 		}
 		for (int j = 0; j < FOG_PUFFS_PER_ZONE; j++) {
 			fog_puff_t *p = &zone->puffs[j];
-			if (p->alpha <= 0.003f) {
+			float da = p->alpha * (1.0f - p->disturb); // carved puffs fade out
+			if (da <= 0.003f) {
 				continue;
 			}
-			uint8_t a = (uint8_t)(p->alpha * 255.0f);
+			uint8_t a = (uint8_t)(da * 255.0f);
 			rgba_t color = rgba(base.r, base.g, base.b, a);
 			int s = (int)p->size;
 			render_push_sprite(p->pos, vec2i(s, s), color, tex);
@@ -389,20 +414,23 @@ void fog_draw(void) {
 	// no longer hides it because the shield is drawn without depth writes
 	// (see weapons_draw).
 	render_set_blend_mode(RENDER_BLEND_LIGHTER);
-	uint8_t glow_a = (uint8_t)(FOG_GLOW_ALPHA * 255.0f);
+	rgba_t core_col = rgba(FOG_GLOW_R, FOG_GLOW_G, FOG_GLOW_B, (uint8_t)(FOG_GLOW_CORE_ALPHA * 255.0f));
+	rgba_t halo_col = rgba(FOG_GLOW_R, FOG_GLOW_G, FOG_GLOW_B, (uint8_t)(FOG_GLOW_HALO_ALPHA * 255.0f));
 	for (int i = 0; i < NUM_PILOTS; i++) {
 		ship_t *ship = &g.ships[i];
 		if (!fog_ship_is_near(ship)) {
 			continue;
 		}
-		int glow_size = (int)(FOG_GLOW_SIZE + ship->thrust_mag * FOG_GLOW_THRUST_SCALE);
-		rgba_t glow = rgba(FOG_GLOW_R, FOG_GLOW_G, FOG_GLOW_B, glow_a);
+		float grow = ship->thrust_mag * FOG_GLOW_THRUST_SCALE;
+		int core = (int)(FOG_GLOW_CORE_SIZE + grow);
+		int halo = (int)(FOG_GLOW_HALO_SIZE + grow);
 		for (int e = 0; e < 3; e++) {
 			if (ship->exhaust_plume[e].v == NULL) {
 				continue;
 			}
-			render_push_sprite(ship_exhaust_world(ship, e),
-				vec2i(glow_size, glow_size), glow, tex);
+			vec3_t wp = ship_exhaust_world(ship, e);
+			render_push_sprite(wp, vec2i(halo, halo), halo_col, tex); // soft falloff
+			render_push_sprite(wp, vec2i(core, core), core_col, tex); // bright center
 		}
 	}
 
