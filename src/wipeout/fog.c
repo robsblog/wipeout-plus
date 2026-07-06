@@ -2,6 +2,7 @@
 
 #include "../mem.h"
 #include "../system.h"
+#include "../utils.h"
 #include "../render.h"
 
 #include "track.h"
@@ -46,6 +47,23 @@
 // Screen-fog: how strongly the shader fog fills the view when inside a zone.
 #define FOG_DENSITY_DIST   22000.0f // camera closer than this to a zone -> screen fog ramps in
 #define FOG_SCREEN_MAX     1.0f     // peak screen-fog strength
+
+// Wake trail: the readable "trick" for interaction. A ship inside the fog drops
+// churned puffs that billow out to the sides and fade -- a visible displacement
+// wake. They only spawn while the ship is in a fog zone, so they only show in
+// the fog. This sells "I'm parting the fog" far better than nudging big puffs.
+#define FOG_WAKE_MAX       160     // pool size
+#define FOG_WAKE_INTERVAL  0.018f  // seconds between spawns per in-fog ship
+#define FOG_WAKE_LIFE_MIN  0.55f
+#define FOG_WAKE_LIFE_MAX  0.95f
+#define FOG_WAKE_SIDE_MIN  1600.0f // lateral billow speed
+#define FOG_WAKE_SIDE_MAX  3200.0f
+#define FOG_WAKE_BACK      900.0f   // backward drift (opposite ship forward)
+#define FOG_WAKE_SIZE_MIN  1100.0f
+#define FOG_WAKE_SIZE_MAX  2200.0f
+#define FOG_WAKE_GROW      1.8f     // size multiplier growth over life
+#define FOG_WAKE_ALPHA     0.55f    // peak opacity
+#define FOG_WAKE_DAMP      0.90f
 
 // Activation distance: a zone is active when the camera is within this range.
 #define FOG_ACTIVATE_DIST  (RENDER_FADEOUT_NEAR)
@@ -103,6 +121,18 @@ typedef struct {
 
 static fog_zone_t fog_zones[FOG_MAX_ZONES];
 static int fog_zone_count = 0;
+
+// Transient wake puffs dropped behind ships that are inside the fog.
+typedef struct {
+	vec3_t pos;
+	vec3_t vel;
+	float  life;      // counts down to 0
+	float  max_life;
+	float  size;
+} fog_wake_t;
+
+static fog_wake_t fog_wakes[FOG_WAKE_MAX];
+static float fog_wake_spawn_acc = 0.0f;
 
 // Deterministic per-zone PRNG (xorshift32) -- no per-frame rand, seeded from
 // the track section number so puff layout is stable across runs.
@@ -276,6 +306,10 @@ void fog_load(void) {
 }
 
 void fog_init(void) {
+	for (int i = 0; i < FOG_WAKE_MAX; i++) {
+		fog_wakes[i].life = 0.0f;
+	}
+	fog_wake_spawn_acc = 0.0f;
 	for (int i = 0; i < fog_zone_count; i++) {
 		fog_zone_t *zone = &fog_zones[i];
 		zone->active = false;
@@ -306,6 +340,68 @@ static int fog_gather_near_ships(ship_t **out) {
 		}
 	}
 	return count;
+}
+
+// How deep in the fog a world point is: 0 outside any active zone, ->1 near a
+// zone centre. Used to gate wake spawning so the wake only appears in the fog.
+static float fog_density_at(vec3_t p) {
+	float best = 0.0f;
+	for (int i = 0; i < fog_zone_count; i++) {
+		if (!fog_zones[i].active) {
+			continue;
+		}
+		float d = vec3_len(vec3_sub(p, fog_zones[i].center));
+		float f = 1.0f - d / FOG_DENSITY_DIST;
+		if (f > best) { best = f; }
+	}
+	return best;
+}
+
+// Age existing wake puffs and spawn new ones behind ships that are in the fog.
+static void fog_wakes_update(float dt, ship_t **near_ships, int near_count) {
+	for (int i = 0; i < FOG_WAKE_MAX; i++) {
+		fog_wake_t *w = &fog_wakes[i];
+		if (w->life <= 0.0f) {
+			continue;
+		}
+		w->life -= dt;
+		w->vel = vec3_mulf(w->vel, FOG_WAKE_DAMP);
+		w->pos = vec3_add(w->pos, vec3_mulf(w->vel, dt));
+	}
+
+	fog_wake_spawn_acc += dt;
+	if (fog_wake_spawn_acc < FOG_WAKE_INTERVAL) {
+		return;
+	}
+	fog_wake_spawn_acc = 0.0f;
+
+	for (int s = 0; s < near_count; s++) {
+		ship_t *ship = near_ships[s];
+		if (fog_density_at(ship->position) <= 0.05f) {
+			continue;
+		}
+		vec3_t fwd = vec3_normalize(vec3_sub(ship_nose(ship), ship->position));
+		vec3_t sidev = vec3_normalize(vec3_cross(fwd, vec3(0, 1, 0)));
+		// Two puffs per tick, one billowing to each side of the wake.
+		for (int k = 0; k < 2; k++) {
+			int slot = -1;
+			for (int i = 0; i < FOG_WAKE_MAX; i++) {
+				if (fog_wakes[i].life <= 0.0f) { slot = i; break; }
+			}
+			if (slot < 0) { break; }
+			fog_wake_t *w = &fog_wakes[slot];
+			float sgn = (k == 0) ? -1.0f : 1.0f;
+			// Spawn just behind the ship, at fog level (+Y is down).
+			w->pos = vec3_add(ship->position,
+				vec3_add(vec3_mulf(fwd, -300.0f), vec3(0, 250.0f, 0)));
+			float side_speed = sgn * rand_float(FOG_WAKE_SIDE_MIN, FOG_WAKE_SIDE_MAX);
+			w->vel = vec3_add(vec3_mulf(sidev, side_speed),
+				vec3_add(vec3_mulf(fwd, -FOG_WAKE_BACK), vec3(0, rand_float(-350.0f, -80.0f), 0)));
+			w->max_life = rand_float(FOG_WAKE_LIFE_MIN, FOG_WAKE_LIFE_MAX);
+			w->life = w->max_life;
+			w->size = rand_float(FOG_WAKE_SIZE_MIN, FOG_WAKE_SIZE_MAX);
+		}
+	}
 }
 
 void fog_update(void) {
@@ -407,6 +503,9 @@ void fog_update(void) {
 	// Drive the screen-filling shader fog for the "inside the fog" feeling.
 	if (screen_density > 1.0f) { screen_density = 1.0f; }
 	render_set_fog_density(screen_density * FOG_SCREEN_MAX);
+
+	// Ships churn a visible wake where they pass through the fog.
+	fog_wakes_update(dt, near_ships, near_count);
 }
 
 void fog_draw(void) {
@@ -440,6 +539,22 @@ void fog_draw(void) {
 			int h = (int)(p->size * FOG_PUFF_FLATTEN); // wide + low: flat ground layer
 			render_push_sprite(p->pos, vec2i(w, h), color, tex);
 		}
+	}
+
+	// Wake puffs: churned fog billowing off the ships' path, fading out. Same
+	// alpha blend + fog colour as the layer, so it reads as displaced substance.
+	for (int i = 0; i < FOG_WAKE_MAX; i++) {
+		fog_wake_t *wk = &fog_wakes[i];
+		if (wk->life <= 0.0f) {
+			continue;
+		}
+		float t = wk->life / wk->max_life;      // 1 at birth -> 0 at death
+		float a = t * FOG_WAKE_ALPHA;
+		float grow = 1.0f + (1.0f - t) * FOG_WAKE_GROW;
+		int ws = (int)(wk->size * grow);
+		int hs = (int)(wk->size * grow * FOG_PUFF_FLATTEN * 1.6f); // a touch taller: churn
+		render_push_sprite(wk->pos, vec2i(ws, hs),
+			rgba(base.r, base.g, base.b, (uint8_t)(a * 255.0f)), tex);
 	}
 
 	// Additive thruster glow: warm halos at each ship's exhaust mounts. These
