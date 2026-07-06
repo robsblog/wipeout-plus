@@ -425,6 +425,7 @@ static void render_flush(void);
 // }
 
 static void render_create_fog_texture(void);
+static void render_create_glow_texture(void);
 
 void render_init(vec2i_t screen_size) {
 	#if defined(__APPLE__) && defined(__MACH__)
@@ -493,8 +494,9 @@ void render_init(vec2i_t screen_size) {
 	};
 	RENDER_NO_TEXTURE = render_texture_create(2, 2, white_pixels);
 
-	// Permanent base texture: soft fog sprite (see render_fog_texture).
+	// Permanent base textures: soft fog sprite + smooth glow sprite.
 	render_create_fog_texture();
+	render_create_glow_texture();
 
 
 	// Backbuffer
@@ -863,6 +865,36 @@ uint16_t render_fog_texture(void) {
 	return fog_texture_index;
 }
 
+// Smooth bright radial sprite (no grain): a tight glowing core with soft
+// falloff. Used for light-like effects (exhaust trail, thruster glow) so they
+// read as light, not smoke. Permanent base texture like the fog sprite.
+static uint16_t glow_texture_index = 0;
+
+static void render_create_glow_texture(void) {
+	#define GLOW_TEX_SIZE 64
+	rgba_t pixels[GLOW_TEX_SIZE * GLOW_TEX_SIZE];
+	float center = (GLOW_TEX_SIZE - 1) * 0.5f;
+	float radius = GLOW_TEX_SIZE * 0.5f;
+	for (int y = 0; y < GLOW_TEX_SIZE; y++) {
+		for (int x = 0; x < GLOW_TEX_SIZE; x++) {
+			float dx = x - center;
+			float dy = y - center;
+			float r = sqrtf(dx * dx + dy * dy) / radius;
+			float a = 1.0f - r;
+			if (a < 0.0f) { a = 0.0f; }
+			if (a > 1.0f) { a = 1.0f; }
+			a = a * a * a; // tight bright core, smooth glow falloff
+			pixels[y * GLOW_TEX_SIZE + x] = rgba(255, 255, 255, (uint8_t)(a * 255.0f));
+		}
+	}
+	glow_texture_index = render_texture_create(GLOW_TEX_SIZE, GLOW_TEX_SIZE, pixels);
+	#undef GLOW_TEX_SIZE
+}
+
+uint16_t render_glow_texture(void) {
+	return glow_texture_index;
+}
+
 
 
 vec3_t render_transform(vec3_t pos) {
@@ -1106,6 +1138,7 @@ void render_textures_reset(uint16_t len) {
 		};
 		RENDER_NO_TEXTURE = render_texture_create(2, 2, white_pixels);
 		render_create_fog_texture();
+		render_create_glow_texture();
 		return;
 	}
 

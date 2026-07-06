@@ -80,6 +80,9 @@ void render_push_2d_tile(vec2i_t pos, vec2i_t uv_offset, vec2i_t uv_size, vec2i_
 uint16_t render_fog_texture(void) {
 	return 0;
 }
+uint16_t render_glow_texture(void) {
+	return 0;
+}
 uint16_t render_texture_create(uint32_t width, uint32_t height, rgba_t *pixels) {
 	(void) width; (void) height; (void) pixels;
 	return 0;

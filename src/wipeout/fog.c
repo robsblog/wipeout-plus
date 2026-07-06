@@ -563,6 +563,7 @@ void fog_draw(void) {
 	// no longer hides it because the shield is drawn without depth writes
 	// (see weapons_draw).
 	render_set_blend_mode(RENDER_BLEND_LIGHTER);
+	uint16_t glow_tex = render_glow_texture(); // smooth -> reads as light, not smoke
 	rgba_t core_col = rgba(FOG_GLOW_R, FOG_GLOW_G, FOG_GLOW_B, (uint8_t)(FOG_GLOW_CORE_ALPHA * 255.0f));
 	rgba_t halo_col = rgba(FOG_GLOW_R, FOG_GLOW_G, FOG_GLOW_B, (uint8_t)(FOG_GLOW_HALO_ALPHA * 255.0f));
 	for (int i = 0; i < NUM_PILOTS; i++) {
@@ -578,8 +579,8 @@ void fog_draw(void) {
 				continue;
 			}
 			vec3_t wp = ship_exhaust_world(ship, e);
-			render_push_sprite(wp, vec2i(halo, halo), halo_col, tex); // soft falloff
-			render_push_sprite(wp, vec2i(core, core), core_col, tex); // bright center
+			render_push_sprite(wp, vec2i(halo, halo), halo_col, glow_tex); // soft falloff
+			render_push_sprite(wp, vec2i(core, core), core_col, glow_tex); // bright center
 		}
 	}
 

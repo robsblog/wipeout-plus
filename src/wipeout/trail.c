@@ -13,20 +13,27 @@
 
 #define TRAIL_MAX        512
 #define TRAIL_NEAR_DIST  (RENDER_FADEOUT_NEAR * 0.6f) // only trail near/visible ships
-#define TRAIL_INTERVAL   0.020f  // seconds between spawns (per engine)
-#define TRAIL_LIFE       0.45f   // fade-out time
-#define TRAIL_SIZE       340.0f  // billboard size at birth
-#define TRAIL_BACK       500.0f  // backward drift from the engine (u/s)
-#define TRAIL_JITTER     120.0f  // spawn spread
-#define TRAIL_ALPHA      0.30f   // additive brightness at birth
-#define TRAIL_R          150     // cool blue-white, echoing the engine plume
-#define TRAIL_G          190
+#define TRAIL_INTERVAL   0.014f  // seconds between spawns (per engine)
+#define TRAIL_LIFE_MIN   0.14f   // fade-out time at low speed (short streak)
+#define TRAIL_LIFE_MAX   0.55f   // fade-out time at top speed (long streak)
+#define TRAIL_SIZE       230.0f  // billboard size at birth (tight = light, not smoke)
+#define TRAIL_BACK       350.0f  // backward drift from the engine (u/s)
+#define TRAIL_JITTER     45.0f   // spawn spread (small = coherent streak)
+#define TRAIL_ALPHA      0.42f   // additive brightness at birth
+#define TRAIL_R          170     // bright cyan-white light
+#define TRAIL_G          215
 #define TRAIL_B          255
+
+// Speed gating (ship->speed = |velocity|): below MIN no trail (no standstill
+// pile-up); at/above REF the trail is full length.
+#define TRAIL_SPEED_MIN  9000.0f
+#define TRAIL_SPEED_REF  52000.0f
 
 typedef struct {
 	vec3_t pos;
 	vec3_t vel;
-	float  life; // counts down to 0
+	float  life;     // counts down to 0
+	float  max_life; // lifetime it was born with (for fade)
 	float  size;
 } trail_t;
 
@@ -68,6 +75,16 @@ void trail_update(void) {
 		if (!trail_ship_near(ship)) {
 			continue;
 		}
+		// Scale with speed: no trail at a standstill (no additive pile-up),
+		// longer streak the faster you go.
+		float speed_factor = (ship->speed - TRAIL_SPEED_MIN) /
+			(TRAIL_SPEED_REF - TRAIL_SPEED_MIN);
+		if (speed_factor <= 0.0f) {
+			continue;
+		}
+		if (speed_factor > 1.0f) { speed_factor = 1.0f; }
+		float life = TRAIL_LIFE_MIN + speed_factor * (TRAIL_LIFE_MAX - TRAIL_LIFE_MIN);
+
 		vec3_t fwd = vec3_normalize(vec3_sub(ship_nose(ship), ship->position));
 		for (int e = 0; e < 3; e++) {
 			if (ship->exhaust_plume[e].v == NULL) {
@@ -84,7 +101,8 @@ void trail_update(void) {
 				     rand_float(-TRAIL_JITTER, TRAIL_JITTER),
 				     rand_float(-TRAIL_JITTER, TRAIL_JITTER)));
 			t->vel = vec3_mulf(fwd, -TRAIL_BACK); // stream out behind the engine
-			t->life = TRAIL_LIFE;
+			t->life = life;
+			t->max_life = life;
 			t->size = TRAIL_SIZE;
 		}
 	}
@@ -95,15 +113,15 @@ void trail_draw(void) {
 	render_set_depth_write(false);
 	render_set_blend_mode(RENDER_BLEND_LIGHTER);
 
-	uint16_t tex = render_fog_texture(); // reuse the soft radial sprite
+	uint16_t tex = render_glow_texture(); // smooth bright sprite -> light, not smoke
 	for (int i = 0; i < TRAIL_MAX; i++) {
 		trail_t *t = &trails[i];
 		if (t->life <= 0.0f) {
 			continue;
 		}
-		float f = t->life / TRAIL_LIFE;          // 1 at birth -> 0 at death
+		float f = t->life / t->max_life;         // 1 at birth -> 0 at death
 		float a = f * TRAIL_ALPHA;
-		int s = (int)(t->size * (0.4f + 0.6f * f)); // shrink as it fades
+		int s = (int)(t->size * (0.5f + 0.5f * f)); // shrink as it fades
 		render_push_sprite(t->pos, vec2i(s, s),
 			rgba(TRAIL_R, TRAIL_G, TRAIL_B, (uint8_t)(a * 255.0f)), tex);
 	}
