@@ -786,16 +786,36 @@ void render_set_fog(bool enabled, rgba_t color) {
 	fog_color = color;
 }
 
-// Soft radial-gradient sprite texture used by the fog-volume subsystem. White
-// (neutral 128) RGB, alpha falls off quadratically toward the edge so
-// overlapping puffs blend without hard sprite borders. Created once as a
-// permanent base texture (see render_create_fog_texture) so its index stays
-// below global_textures_len and survives track reloads / texture resets --
-// otherwise a stale high index aborts render_push_sprite ("Invalid texture").
+// Soft, GRAINY sprite texture for the fog-volume subsystem: a radial falloff
+// (soft edges, no hard sprite borders) multiplied by fBm value noise so each
+// puff has internal "sandy" structure. Overlapping puffs then read as a dense,
+// tangible churning substance rather than a smooth shimmer. White (neutral 128)
+// RGB. Created once as a permanent base texture (see render_create_fog_texture)
+// so its index stays below global_textures_len and survives track reloads /
+// texture resets -- otherwise a stale index aborts render_push_sprite.
 static uint16_t fog_texture_index = 0;
 
+static float fog_hash(int x, int y) {
+	uint32_t h = (uint32_t)(x * 374761393 + y * 668265263);
+	h = (h ^ (h >> 13)) * 1274126177u;
+	return ((h ^ (h >> 16)) & 0xffff) / 65535.0f;
+}
+
+// Value noise with smoothstep interpolation, tileable over `period` cells.
+static float fog_vnoise(float x, float y, int period) {
+	int xi = (int)floorf(x), yi = (int)floorf(y);
+	float fx = x - xi, fy = y - yi;
+	int x0 = xi % period, y0 = yi % period;
+	int x1 = (xi + 1) % period, y1 = (yi + 1) % period;
+	float a = fog_hash(x0, y0), b = fog_hash(x1, y0);
+	float c = fog_hash(x0, y1), d = fog_hash(x1, y1);
+	float sx = fx * fx * (3.0f - 2.0f * fx);
+	float sy = fy * fy * (3.0f - 2.0f * fy);
+	return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+
 static void render_create_fog_texture(void) {
-	#define FOG_TEX_SIZE 64
+	#define FOG_TEX_SIZE 128
 	rgba_t pixels[FOG_TEX_SIZE * FOG_TEX_SIZE];
 	float center = (FOG_TEX_SIZE - 1) * 0.5f;
 	float radius = FOG_TEX_SIZE * 0.5f;
@@ -804,10 +824,21 @@ static void render_create_fog_texture(void) {
 			float dx = x - center;
 			float dy = y - center;
 			float r = sqrtf(dx * dx + dy * dy) / radius;
-			float a = 1.0f - r;
+			float falloff = 1.0f - r;
+			if (falloff < 0.0f) { falloff = 0.0f; }
+			falloff = falloff * falloff; // soft round edge
+
+			// fBm grain (tileable octaves) -> "sandy" internal structure.
+			float u = (float)x / FOG_TEX_SIZE;
+			float v = (float)y / FOG_TEX_SIZE;
+			float grain =
+				0.55f * fog_vnoise(u * 6.0f,  v * 6.0f,  6) +
+				0.30f * fog_vnoise(u * 12.0f, v * 12.0f, 12) +
+				0.15f * fog_vnoise(u * 24.0f, v * 24.0f, 24);
+			// Bias toward more substance while keeping some clumping variation.
+			float a = falloff * (0.35f + 0.75f * grain);
 			if (a < 0.0f) { a = 0.0f; }
 			if (a > 1.0f) { a = 1.0f; }
-			a = a * a;
 			pixels[y * FOG_TEX_SIZE + x] = rgba(128, 128, 128, (uint8_t)(a * 255.0f));
 		}
 	}

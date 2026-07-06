@@ -27,13 +27,13 @@
 #define FOG_ZONE_SECTIONS  22      // consecutive sections a fog run spans
 #define FOG_ZONE_WIDTH     3400.0f // lateral half-extent (across the track)
 #define FOG_ALONG_JITTER   1800.0f // along-track scatter around each sampled section
-#define FOG_GROUND_RISE    600.0f  // max rise above the road (-Y); t^3 keeps most puffs low
-#define FOG_GROUND_SINK    150.0f  // how far it dips below the road surface (+Y)
-#define FOG_PUFF_SIZE      5200.0f // billboard WIDTH (world units)
+#define FOG_GROUND_RISE    780.0f  // max rise above the road (-Y); t^3 keeps most puffs low
+#define FOG_GROUND_SINK    200.0f  // how far it dips below the road surface (+Y)
+#define FOG_PUFF_SIZE      5000.0f // billboard WIDTH (world units)
 #define FOG_PUFF_SIZE_VAR  1500.0f // +/- width variation
-#define FOG_PUFF_FLATTEN   0.18f   // height = width * this -> wide, low puffs hug the ground
+#define FOG_PUFF_FLATTEN   0.26f   // height = width * this -> wide, low puffs hug the ground
 
-#define FOG_PUFF_MAX_ALPHA 0.32f   // per-puff opacity of a low puff; high puffs fade out
+#define FOG_PUFF_MAX_ALPHA 0.58f   // per-puff opacity of a low puff; grainy tex needs more to feel dense
 #define FOG_FADE_SPEED     1.5f     // alpha ramp rate toward target (1/s)
 
 // A passing ship punches a transient hole in the fog (a visible wake/cut) that
