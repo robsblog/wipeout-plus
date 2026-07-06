@@ -13,6 +13,35 @@
 
 #define DEBRIS_MAX 1024
 
+// Counts per burst
+#define DEBRIS_SPARKS_MIN 24
+#define DEBRIS_SPARKS_MAX 40
+#define DEBRIS_CHUNKS_MIN 6
+#define DEBRIS_CHUNKS_MAX 10
+#define DEBRIS_SMOKE_MIN  3
+#define DEBRIS_SMOKE_MAX  6
+
+// Launch (units/second; debris integrates pos += vel*dt like trail/particle)
+#define DEBRIS_SPARK_SPEED   1400.0f
+#define DEBRIS_CHUNK_SPEED   800.0f
+#define DEBRIS_SPARK_INHERIT 0.25f   // fraction of ship velocity inherited
+#define DEBRIS_CHUNK_INHERIT 0.15f
+
+// Lifetimes (seconds)
+#define DEBRIS_SPARK_LIFE_MIN 0.8f
+#define DEBRIS_SPARK_LIFE_MAX 1.8f
+#define DEBRIS_CHUNK_LIFE_MIN 1.2f
+#define DEBRIS_CHUNK_LIFE_MAX 2.5f
+
+// Billboard sizes (world units)
+#define DEBRIS_SPARK_SIZE_MIN 80.0f
+#define DEBRIS_SPARK_SIZE_MAX 150.0f
+#define DEBRIS_CHUNK_SIZE_MIN 200.0f
+#define DEBRIS_CHUNK_SIZE_MAX 340.0f
+
+// Dev-hit helper: force a hit on the player ship every N seconds.
+#define DEBRIS_DEV_HIT_INTERVAL 2.0f
+
 typedef enum {
     DEBRIS_KIND_SPARK, // small, additive, physics + bounce
     DEBRIS_KIND_CHUNK, // larger, additive, physics + bounce
@@ -38,21 +67,129 @@ void debris_init(void) {
     debris_active = 0;
 }
 
+static rgba_t debris_ember_color(float f, uint8_t kind) {
+    if (f < 0.0f) { f = 0.0f; }
+    if (f > 1.0f) { f = 1.0f; }
+    uint8_t r = 255;
+    uint8_t g = (uint8_t)(60.0f + 180.0f * f * f);       // greens drop first -> reddening
+    uint8_t b = (uint8_t)(20.0f + 180.0f * f * f * f);   // blue only while white-hot
+    float a = f / 0.35f;                                  // hold bright, fade at the end
+    if (a > 1.0f) { a = 1.0f; }
+    if (kind == DEBRIS_KIND_SPARK) { a *= 0.9f; }
+    return rgba(r, g, b, (uint8_t)(a * 255.0f));
+}
+
+static void debris_spawn_one(uint8_t kind, vec3_t origin, vec3_t vel,
+    section_t *section, float max_life, float size, int bounces) {
+    if (debris_active >= DEBRIS_MAX) {
+        return;
+    }
+    debris_t *d = &debris_pool[debris_active++];
+    d->pos = origin;
+    d->vel = vel;
+    d->max_life = max_life;
+    d->life = max_life;
+    d->size = size;
+    d->section = section;
+    d->kind = kind;
+    d->state = DEBRIS_FLYING;
+    d->bounces_left = (uint8_t)bounces;
+}
+
 void debris_spawn_burst(vec3_t origin, vec3_t base_velocity, section_t *section) {
-    (void)origin; (void)base_velocity; (void)section;
-    // filled in Task 2
+    if (!save.debris) {
+        return;
+    }
+    if (section == NULL) {
+        section = track_nearest_section(origin, vec3(1,1,1), g.track.sections, NULL);
+    }
+
+    int sparks = rand_int(DEBRIS_SPARKS_MIN, DEBRIS_SPARKS_MAX);
+    for (int i = 0; i < sparks; i++) {
+        vec3_t v = vec3_add(vec3_rand(DEBRIS_SPARK_SPEED),
+            vec3_mulf(base_velocity, DEBRIS_SPARK_INHERIT));
+        debris_spawn_one(DEBRIS_KIND_SPARK, origin, v, section,
+            rand_float(DEBRIS_SPARK_LIFE_MIN, DEBRIS_SPARK_LIFE_MAX),
+            rand_float(DEBRIS_SPARK_SIZE_MIN, DEBRIS_SPARK_SIZE_MAX),
+            rand_int(1, 2));
+    }
+    int chunks = rand_int(DEBRIS_CHUNKS_MIN, DEBRIS_CHUNKS_MAX);
+    for (int i = 0; i < chunks; i++) {
+        vec3_t v = vec3_add(vec3_rand(DEBRIS_CHUNK_SPEED),
+            vec3_mulf(base_velocity, DEBRIS_CHUNK_INHERIT));
+        debris_spawn_one(DEBRIS_KIND_CHUNK, origin, v, section,
+            rand_float(DEBRIS_CHUNK_LIFE_MIN, DEBRIS_CHUNK_LIFE_MAX),
+            rand_float(DEBRIS_CHUNK_SIZE_MIN, DEBRIS_CHUNK_SIZE_MAX),
+            rand_int(1, 2));
+    }
+    // Smoke puffs are added in Task 4.
+}
+
+static void debris_dev_hit_tick(void) {
+    static int dev_hit = -1;
+    static float acc = 0.0f;
+    if (dev_hit < 0) {
+        dev_hit = getenv("WIPEOUT_DEV_HIT") ? 1 : 0;
+    }
+    if (!dev_hit) {
+        return;
+    }
+    acc += (float)system_tick();
+    if (acc < DEBRIS_DEV_HIT_INTERVAL) {
+        return;
+    }
+    acc = 0.0f;
+    ship_t *ship = &g.ships[g.pilot];
+    debris_spawn_burst(ship->position, ship->velocity, ship->section);
 }
 
 void debris_update(void) {
     if (!save.debris) {
         return;
     }
-    // filled in Task 2 (motion) / Task 3 (physics)
+    debris_dev_hit_tick();
+
+    float dt = (float)system_tick();
+    if (dt <= 0.0f) {
+        return;
+    }
+
+    for (int i = 0; i < debris_active; i++) {
+        debris_t *d = &debris_pool[i];
+        d->life -= dt;
+        if (d->life <= 0.0f) {
+            debris_pool[i--] = debris_pool[--debris_active];
+            continue;
+        }
+        d->pos = vec3_add(d->pos, vec3_mulf(d->vel, dt));
+    }
 }
 
 void debris_draw(void) {
     if (!save.debris || debris_active == 0) {
         return;
     }
-    // filled in Task 2 (embers) / Task 4 (smoke)
+
+    render_set_model_mat(&mat4_identity());
+    render_set_depth_write(false);
+
+    // Pass 1: additive embers (sparks + chunks)
+    render_set_blend_mode(RENDER_BLEND_LIGHTER);
+    render_set_depth_offset(-32.0);
+    uint16_t glow = render_glow_texture();
+    for (int i = 0; i < debris_active; i++) {
+        debris_t *d = &debris_pool[i];
+        if (d->kind == DEBRIS_KIND_SMOKE) {
+            continue;
+        }
+        float f = d->life / d->max_life;   // 1 hot -> 0 spent
+        rgba_t col = debris_ember_color(f, d->kind);
+        float flicker = 0.85f + 0.15f * sinf((float)system_cycle_time() * 40.0f + (float)i);
+        int s = (int)(d->size * (d->kind == DEBRIS_KIND_CHUNK ? flicker : 1.0f));
+        render_push_sprite(d->pos, vec2i(s, s), col, glow);
+    }
+
+    render_set_depth_offset(0.0);
+    render_set_depth_write(true);
+    render_set_blend_mode(RENDER_BLEND_NORMAL);
 }

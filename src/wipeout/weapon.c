@@ -11,6 +11,7 @@
 #include "image.h"
 #include "particle.h"
 #include "camera.h"
+#include "debris.h"
 
 typedef struct weapon_t {
 	float timer;
@@ -283,11 +284,7 @@ ship_t *weapon_collides_with_ship(weapon_t *self) {
 
 		float distance = vec3_len(vec3_sub(ship->position, self->position));
 		if (distance < 512) {
-			for (int p = 0; p < 32; p++) {
-				vec3_t velocity = vec3_rand(512);
-				velocity = vec3_add(velocity, vec3_mulf(ship->velocity, 0.25));
-				particles_spawn(self->position, self->ship_hit_particle, velocity, 256);
-			}
+			debris_spawn_burst(self->position, ship->velocity, ship->section);
 			return ship;
 		}
 	}
