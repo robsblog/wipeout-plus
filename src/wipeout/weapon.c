@@ -1,6 +1,7 @@
 #include "../mem.h"
 #include "../utils.h"
 #include "../system.h"
+#include "../render.h"
 
 #include "track.h"
 #include "ship.h"
@@ -221,7 +222,17 @@ void weapons_draw(void) {
 			if (weapon->model == weapon_assets.mine) {
 				weapon_update_mine_lights(weapon, i);
 			}
+			// The shield is a translucent bubble; don't let it write depth, or
+			// it occludes emissive effects drawn afterwards (e.g. thruster glow).
+			bool is_shield = (weapon->model == weapon_assets.shield ||
+				weapon->model == weapon_assets.shield_internal);
+			if (is_shield) {
+				render_set_depth_write(false);
+			}
 			object_draw(weapon->model, &mat);
+			if (is_shield) {
+				render_set_depth_write(true);
+			}
 		}
 	}
 }

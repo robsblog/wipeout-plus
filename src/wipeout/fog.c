@@ -13,8 +13,8 @@
 // --- Tuning (starting values; final balancing happens in Task 5) -------------
 
 #define FOG_MAX_ZONES      18    // hard cap on selected zones
-#define FOG_PUFFS_PER_ZONE 40    // billboards per zone; many overlapping = continuous swath
-#define FOG_MIN_SPACING    10    // sections skipped after a pick (keeps zones sparse)
+#define FOG_PUFFS_PER_ZONE 72    // billboards per zone; many overlapping = continuous swath
+#define FOG_MIN_SPACING    12    // sections skipped after a pick (keeps zones sparse)
 
 #define FOG_DIP_WINDOW     3     // +/- sections for the local-maximum-of-y test
 #define FOG_STRAIGHT_SPAN  6     // sections examined for the straightness test
@@ -23,24 +23,24 @@
 // A zone is a swath stretched ALONG the track (not a point), so a bank covers a
 // whole stretch and reads as continuous drifting fog rather than speckled dots.
 #define FOG_SHIP_HOVER     2000.0f  // ships hover ~this far above section center (-Y)
-#define FOG_ZONE_LENGTH    16000.0f // extent along the track direction
-#define FOG_ZONE_WIDTH     3200.0f  // lateral half-extent (across the track)
-#define FOG_GROUND_RISE    2600.0f  // how far the fog rises above the road (-Y)
-#define FOG_GROUND_SINK    300.0f   // how far it sinks below the road (+Y)
+#define FOG_ZONE_LENGTH    30000.0f // extent along the track direction (long swath)
+#define FOG_ZONE_WIDTH     3600.0f  // lateral half-extent (across the track)
+#define FOG_GROUND_RISE    1300.0f  // how far the fog rises above the road (-Y) -- kept low/flat
+#define FOG_GROUND_SINK    500.0f   // how far it sinks below the road (+Y)
 #define FOG_ZONE_RADIUS    (FOG_ZONE_LENGTH * 0.5f) // used for activation radius
-#define FOG_PUFF_SIZE      4600.0f  // base billboard size (world units)
-#define FOG_PUFF_SIZE_VAR  1200.0f  // +/- size variation
+#define FOG_PUFF_SIZE      5400.0f  // base billboard size (world units)
+#define FOG_PUFF_SIZE_VAR  1600.0f  // +/- size variation
 
-#define FOG_PUFF_MAX_ALPHA 0.34f   // per-puff peak opacity; the dense overlap builds depth
+#define FOG_PUFF_MAX_ALPHA 0.20f   // low per-puff opacity; the dense overlap diffuses into a wash
 #define FOG_FADE_SPEED     1.5f     // alpha ramp rate toward target (1/s)
 
 // Activation distance: a zone is active when the camera is within this range.
 #define FOG_ACTIVATE_DIST  (RENDER_FADEOUT_NEAR)
 
-// Spring parameters (infrastructure for Task 4 ship interaction; puffs rest at
-// home while no external force acts on them).
-#define FOG_SPRING_K       6.0f
-#define FOG_SPRING_DAMPING 0.90f
+// Spring parameters: soft + slow to settle so a ship's wake stays visible for a
+// moment before the fog closes back in.
+#define FOG_SPRING_K       2.5f
+#define FOG_SPRING_DAMPING 0.88f
 
 // --- Ship interaction (Task 4; starting values, final balancing in Task 5) ---
 
@@ -51,10 +51,10 @@
 // Turbulence: a ship pushes puffs it drives near. Kick direction is the outward
 // direction (puff away from ship) blended with the ship's forward, so puffs get
 // shoved aside and trail behind. Scaled by proximity; the spring pulls them back.
-#define FOG_PUSH_RADIUS    4000.0f  // ship influences puffs within this range
-#define FOG_PUSH_ACCEL     60000.0f // kick acceleration at zero distance (u/s^2)
-#define FOG_PUSH_FWD_BLEND 0.5f     // 0 = pure outward, 1 = pure ship-forward
-#define FOG_PUSH_MAX_DISP  3000.0f  // clamp puff displacement from home (u)
+#define FOG_PUSH_RADIUS    6500.0f  // ship influences puffs within this range
+#define FOG_PUSH_ACCEL     150000.0f // kick acceleration at zero distance (u/s^2)
+#define FOG_PUSH_FWD_BLEND 0.45f    // 0 = pure outward, 1 = pure ship-forward
+#define FOG_PUSH_MAX_DISP  6000.0f  // clamp puff displacement from home (u)
 
 // Additive thruster glow sprites at the exhaust mounts.
 #define FOG_GLOW_SIZE        420.0f  // base halo size (world units)
@@ -371,10 +371,9 @@ void fog_draw(void) {
 
 	// Additive thruster glow: warm halos at each ship's exhaust mounts. These
 	// brighten and tint whatever fog they sit in. Only near/visible ships.
-	// Depth test OFF: the glow is emissive light, so it must not be occluded by
-	// translucent geometry drawn earlier (e.g. a shield bubble, which otherwise
-	// hid every ship's glow behind it). It still writes no depth.
-	render_set_depth_test(false);
+	// Depth-tested so opaque track geometry occludes it correctly; the shield
+	// no longer hides it because the shield is drawn without depth writes
+	// (see weapons_draw).
 	render_set_blend_mode(RENDER_BLEND_LIGHTER);
 	uint8_t glow_a = (uint8_t)(FOG_GLOW_ALPHA * 255.0f);
 	for (int i = 0; i < NUM_PILOTS; i++) {
@@ -393,7 +392,6 @@ void fog_draw(void) {
 		}
 	}
 
-	render_set_depth_test(true);
 	render_set_depth_offset(0.0);
 	render_set_depth_write(true);
 	render_set_blend_mode(RENDER_BLEND_NORMAL);
