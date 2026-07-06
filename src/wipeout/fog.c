@@ -27,18 +27,20 @@
 #define FOG_ZONE_SECTIONS  22      // consecutive sections a fog run spans
 #define FOG_ZONE_WIDTH     3400.0f // lateral half-extent (across the track)
 #define FOG_ALONG_JITTER   1800.0f // along-track scatter around each sampled section
-#define FOG_GROUND_RISE    800.0f  // max rise above the road (-Y); t^3 keeps most puffs low
+#define FOG_GROUND_RISE    600.0f  // max rise above the road (-Y); t^3 keeps most puffs low
 #define FOG_GROUND_SINK    150.0f  // how far it dips below the road surface (+Y)
-#define FOG_PUFF_SIZE      5000.0f // base billboard size (world units)
-#define FOG_PUFF_SIZE_VAR  1500.0f // +/- size variation
+#define FOG_PUFF_SIZE      5200.0f // billboard WIDTH (world units)
+#define FOG_PUFF_SIZE_VAR  1500.0f // +/- width variation
+#define FOG_PUFF_FLATTEN   0.18f   // height = width * this -> wide, low puffs hug the ground
 
 #define FOG_PUFF_MAX_ALPHA 0.32f   // per-puff opacity of a low puff; high puffs fade out
 #define FOG_FADE_SPEED     1.5f     // alpha ramp rate toward target (1/s)
 
 // A passing ship punches a transient hole in the fog (a visible wake/cut) that
 // refills over ~1/DECAY seconds.
-#define FOG_CARVE_RADIUS   3200.0f // ship carves puffs within this range
-#define FOG_DISTURB_DECAY  1.3f    // how fast the hole refills (1/s)
+#define FOG_CARVE_RADIUS   3800.0f // ship carves puffs within this range
+#define FOG_CARVE_GAIN     1.7f    // >1 saturates near passes to a fully cleared hole
+#define FOG_DISTURB_DECAY  0.7f    // how fast the hole refills (1/s) -- slower = longer wake
 
 // Activation distance: a zone is active when the camera is within this range.
 #define FOG_ACTIVATE_DIST  (RENDER_FADEOUT_NEAR)
@@ -65,11 +67,11 @@
 // Additive thruster glow at the exhaust mounts: a bright concentrated core plus
 // a softer halo, so it reads as a light illuminating the fog rather than a soft
 // wash. Sizes grow slightly with thrust.
-#define FOG_GLOW_CORE_SIZE   340.0f  // bright inner core
-#define FOG_GLOW_CORE_ALPHA  0.70f
-#define FOG_GLOW_HALO_SIZE   820.0f  // soft outer halo
-#define FOG_GLOW_HALO_ALPHA  0.30f
-#define FOG_GLOW_THRUST_SCALE 0.28f  // extra size per unit of thrust_mag
+#define FOG_GLOW_CORE_SIZE   300.0f  // bright inner core
+#define FOG_GLOW_CORE_ALPHA  0.34f
+#define FOG_GLOW_HALO_SIZE   760.0f  // soft outer halo
+#define FOG_GLOW_HALO_ALPHA  0.16f
+#define FOG_GLOW_THRUST_SCALE 0.24f  // extra size per unit of thrust_mag
 #define FOG_GLOW_R           255     // warm engine tint
 #define FOG_GLOW_G           170
 #define FOG_GLOW_B           90
@@ -345,9 +347,11 @@ void fog_update(void) {
 					float accel = FOG_PUSH_ACCEL * proximity * proximity;
 					p->vel = vec3_add(p->vel, vec3_mulf(dir, accel * dt));
 
-					// Carve: close passes clear the fog, leaving a wake.
+					// Carve: close passes clear the fog, leaving a wake. Gain>1
+					// saturates the inner passes to a fully cleared hole.
 					if (dist < FOG_CARVE_RADIUS) {
-						float carve = 1.0f - (dist / FOG_CARVE_RADIUS);
+						float carve = (1.0f - dist / FOG_CARVE_RADIUS) * FOG_CARVE_GAIN;
+						if (carve > 1.0f) { carve = 1.0f; }
 						if (carve > p->disturb) { p->disturb = carve; }
 					}
 				}
@@ -403,8 +407,9 @@ void fog_draw(void) {
 			}
 			uint8_t a = (uint8_t)(da * 255.0f);
 			rgba_t color = rgba(base.r, base.g, base.b, a);
-			int s = (int)p->size;
-			render_push_sprite(p->pos, vec2i(s, s), color, tex);
+			int w = (int)p->size;
+			int h = (int)(p->size * FOG_PUFF_FLATTEN); // wide + low: flat ground layer
+			render_push_sprite(p->pos, vec2i(w, h), color, tex);
 		}
 	}
 
