@@ -112,8 +112,6 @@ typedef struct {
 
 typedef struct {
 	vec3_t center;
-	vec3_t forward;      // track direction at the zone (puffs stretch along this)
-	float  radius;
 	int    section_num;
 	bool   active;
 	fog_puff_t puffs[FOG_PUFFS_PER_ZONE];
@@ -183,8 +181,6 @@ static void fog_add_zone(section_t **ordered, int n, int start, int span) {
 	int mid = start + span / 2;
 	if (mid >= n) { mid = n - 1; }
 	zone->center = ordered[mid]->center;      // activation anchor (mid of run)
-	zone->forward = fog_section_heading(ordered[mid]);
-	zone->radius = 0.0f;
 	zone->section_num = ordered[start]->num;
 	zone->active = false;
 
@@ -195,7 +191,12 @@ static void fog_add_zone(section_t **ordered, int n, int start, int span) {
 		if (k >= n) { k = n - 1; }
 		section_t *sec = ordered[k];
 		vec3_t fwd = fog_section_heading(sec);
-		vec3_t lateral = vec3_normalize(vec3_cross(fwd, vec3(0, 1, 0)));
+		vec3_t cross = vec3_cross(fwd, vec3(0, 1, 0));
+		// Guard: degenerate/vertical heading -> fall back to a fixed lateral axis
+		// (vec3_normalize divides unguarded and would yield NaN).
+		vec3_t lateral = (vec3_len(cross) > 0.0001f)
+			? vec3_normalize(cross)
+			: vec3(1, 0, 0);
 		float along = fog_rng_float(-FOG_ALONG_JITTER, FOG_ALONG_JITTER);
 		float lat   = fog_rng_float(-FOG_ZONE_WIDTH, FOG_ZONE_WIDTH);
 		float t     = fog_rng_float(0.0f, 1.0f);
@@ -220,7 +221,6 @@ void fog_load(void) {
 
 	int count = g.track.section_count;
 	if (count <= 0) {
-		printf("[fog] no track sections; 0 fog zones\n");
 		return;
 	}
 
@@ -297,12 +297,6 @@ void fog_load(void) {
 	}
 
 	mem_temp_free(ordered);
-
-	printf("[fog] selected %d fog zones of %d sections:", fog_zone_count, n);
-	for (int i = 0; i < fog_zone_count; i++) {
-		printf(" %d", fog_zones[i].section_num);
-	}
-	printf("\n");
 }
 
 void fog_init(void) {
