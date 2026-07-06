@@ -23,7 +23,6 @@ typedef struct weapon_t {
 
 	int16_t trail_particle;
 	int16_t track_hit_particle;
-	int16_t ship_hit_particle;
 	float trail_spawn_timer;
 
 	int16_t type;
@@ -128,7 +127,6 @@ weapon_t *weapon_init(ship_t *ship) {
 	weapon->active = true;
 	weapon->trail_particle = PARTICLE_TYPE_NONE;
 	weapon->track_hit_particle = PARTICLE_TYPE_NONE;
-	weapon->ship_hit_particle = PARTICLE_TYPE_NONE;
 	weapon->trail_spawn_timer = 0;
 	weapon->drag = 0;
 	return weapon;
@@ -346,7 +344,6 @@ void weapon_update_mine_wait_for_release(weapon_t *self) {
 
 		self->trail_particle = PARTICLE_TYPE_NONE;
 		self->track_hit_particle = PARTICLE_TYPE_NONE;
-		self->ship_hit_particle = PARTICLE_TYPE_FIRE;
 
 		if (self->owner->pilot == g.pilot) {
 			sfx_play(SFX_MINE_DROP);
@@ -407,7 +404,6 @@ void weapon_fire_missile(ship_t *ship) {
 	self->update_func = weapon_update_missile;
 	self->trail_particle = PARTICLE_TYPE_SMOKE;
 	self->track_hit_particle = PARTICLE_TYPE_FIRE_WHITE;
-	self->ship_hit_particle = PARTICLE_TYPE_FIRE;
 	self->target = ship->weapon_target;
 	self->drag = 0.25;
 	weapon_set_trajectory(self);
@@ -458,7 +454,6 @@ void weapon_fire_rocket(ship_t *ship) {
 	self->update_func = weapon_update_rocket;
 	self->trail_particle = PARTICLE_TYPE_SMOKE;
 	self->track_hit_particle = PARTICLE_TYPE_FIRE_WHITE;
-	self->ship_hit_particle = PARTICLE_TYPE_FIRE;
 	self->drag = 0.03125;
 	weapon_set_trajectory(self);
 
@@ -507,7 +502,6 @@ void weapon_fire_ebolt(ship_t *ship) {
 	self->update_func = weapon_update_ebolt;
 	self->trail_particle = PARTICLE_TYPE_EBOLT;
 	self->track_hit_particle = PARTICLE_TYPE_EBOLT;
-	self->ship_hit_particle = PARTICLE_TYPE_GREENY;
 	self->target = ship->weapon_target;
 	self->drag = 0.25;
 	weapon_set_trajectory(self);
