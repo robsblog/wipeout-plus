@@ -12,20 +12,26 @@
 
 // --- Tuning (starting values; final balancing happens in Task 5) -------------
 
-#define FOG_MAX_ZONES      24    // hard cap on selected zones
-#define FOG_PUFFS_PER_ZONE 12    // billboards held per zone
-#define FOG_MIN_SPACING    8     // sections skipped after a pick (keeps zones sparse)
+#define FOG_MAX_ZONES      18    // hard cap on selected zones
+#define FOG_PUFFS_PER_ZONE 40    // billboards per zone; many overlapping = continuous swath
+#define FOG_MIN_SPACING    10    // sections skipped after a pick (keeps zones sparse)
 
 #define FOG_DIP_WINDOW     3     // +/- sections for the local-maximum-of-y test
 #define FOG_STRAIGHT_SPAN  6     // sections examined for the straightness test
 #define FOG_STRAIGHT_MAX   0.35f // max accumulated heading change (rad) to count as straight
 
-#define FOG_SHIP_HOVER     2000.0f // ships hover ~this far above section center (-Y)
-#define FOG_ZONE_RADIUS    3000.0f // spawn spread / half-extent of a zone
-#define FOG_PUFF_SIZE      4000.0f // base billboard size (world units)
-#define FOG_PUFF_SIZE_VAR  2000.0f // +/- size variation
+// A zone is a swath stretched ALONG the track (not a point), so a bank covers a
+// whole stretch and reads as continuous drifting fog rather than speckled dots.
+#define FOG_SHIP_HOVER     2000.0f  // ships hover ~this far above section center (-Y)
+#define FOG_ZONE_LENGTH    16000.0f // extent along the track direction
+#define FOG_ZONE_WIDTH     3200.0f  // lateral half-extent (across the track)
+#define FOG_GROUND_RISE    2600.0f  // how far the fog rises above the road (-Y)
+#define FOG_GROUND_SINK    300.0f   // how far it sinks below the road (+Y)
+#define FOG_ZONE_RADIUS    (FOG_ZONE_LENGTH * 0.5f) // used for activation radius
+#define FOG_PUFF_SIZE      4600.0f  // base billboard size (world units)
+#define FOG_PUFF_SIZE_VAR  1200.0f  // +/- size variation
 
-#define FOG_PUFF_MAX_ALPHA 0.85f   // per-puff peak opacity (0..1); overlap builds up
+#define FOG_PUFF_MAX_ALPHA 0.34f   // per-puff peak opacity; the dense overlap builds depth
 #define FOG_FADE_SPEED     1.5f     // alpha ramp rate toward target (1/s)
 
 // Activation distance: a zone is active when the camera is within this range.
@@ -51,9 +57,9 @@
 #define FOG_PUSH_MAX_DISP  3000.0f  // clamp puff displacement from home (u)
 
 // Additive thruster glow sprites at the exhaust mounts.
-#define FOG_GLOW_SIZE        700.0f  // base halo size (world units)
-#define FOG_GLOW_THRUST_SCALE 0.6f   // extra size per unit of thrust_mag
-#define FOG_GLOW_ALPHA       0.45f   // additive brightness (0..1)
+#define FOG_GLOW_SIZE        420.0f  // base halo size (world units)
+#define FOG_GLOW_THRUST_SCALE 0.30f  // extra size per unit of thrust_mag
+#define FOG_GLOW_ALPHA       0.38f   // additive brightness (0..1)
 #define FOG_GLOW_R           255     // warm engine tint
 #define FOG_GLOW_G           170
 #define FOG_GLOW_B           90
@@ -69,6 +75,7 @@ typedef struct {
 
 typedef struct {
 	vec3_t center;
+	vec3_t forward;      // track direction at the zone (puffs stretch along this)
 	float  radius;
 	int    section_num;
 	bool   active;
@@ -96,19 +103,23 @@ static float fog_rng_float(float min, float max) {
 	return min + (max - min) * t;
 }
 
-// Fill a zone's puffs at deterministic offsets around its center. Ships fly a
-// hover corridor ~FOG_SHIP_HOVER above the section center (+Y is DOWN, so
-// "above" is -Y); puffs straddle that corridor so you drive THROUGH the bank
-// rather than over a layer buried under the track surface.
+// Fill a zone's puffs, distributed ALONG the track direction (a stretched
+// swath, not a ball) with lateral spread and a ground-weighted height so the
+// bank reads as continuous ground fog the ship drives through. +Y is DOWN, so
+// the fog rises toward -Y and is densest near the road (t*t weighting).
 static void fog_zone_spawn_puffs(fog_zone_t *zone) {
 	fog_rng_seed((uint32_t)zone->section_num * 2654435761u + 1u);
+	// Lateral (across-track) axis: forward x world-up. forward is ~horizontal.
+	vec3_t lateral = vec3_normalize(vec3_cross(zone->forward, vec3(0, 1, 0)));
 	for (int i = 0; i < FOG_PUFFS_PER_ZONE; i++) {
 		fog_puff_t *p = &zone->puffs[i];
-		float ox = fog_rng_float(-zone->radius, zone->radius);
-		float oz = fog_rng_float(-zone->radius, zone->radius);
-		// -Y is up: from a bit above the ship down to just under the road.
-		float oy = fog_rng_float(-FOG_SHIP_HOVER - 600.0f, 400.0f);
-		p->home = vec3_add(zone->center, vec3(ox, oy, oz));
+		float along = fog_rng_float(-FOG_ZONE_LENGTH * 0.5f, FOG_ZONE_LENGTH * 0.5f);
+		float lat   = fog_rng_float(-FOG_ZONE_WIDTH, FOG_ZONE_WIDTH);
+		float t     = fog_rng_float(0.0f, 1.0f);
+		float oy    = FOG_GROUND_SINK - FOG_GROUND_RISE * (t * t); // ground-weighted
+		p->home = vec3_add(zone->center,
+			vec3_add(vec3_mulf(zone->forward, along),
+				vec3_add(vec3_mulf(lateral, lat), vec3(0, oy, 0))));
 		p->pos  = p->home;
 		p->vel  = vec3(0, 0, 0);
 		p->size = FOG_PUFF_SIZE + fog_rng_float(-FOG_PUFF_SIZE_VAR, FOG_PUFF_SIZE_VAR);
@@ -133,6 +144,7 @@ static void fog_add_zone(section_t *s) {
 	}
 	fog_zone_t *zone = &fog_zones[fog_zone_count++];
 	zone->center = s->center;
+	zone->forward = fog_section_heading(s);
 	zone->radius = FOG_ZONE_RADIUS;
 	zone->section_num = s->num;
 	zone->active = false;
@@ -359,6 +371,10 @@ void fog_draw(void) {
 
 	// Additive thruster glow: warm halos at each ship's exhaust mounts. These
 	// brighten and tint whatever fog they sit in. Only near/visible ships.
+	// Depth test OFF: the glow is emissive light, so it must not be occluded by
+	// translucent geometry drawn earlier (e.g. a shield bubble, which otherwise
+	// hid every ship's glow behind it). It still writes no depth.
+	render_set_depth_test(false);
 	render_set_blend_mode(RENDER_BLEND_LIGHTER);
 	uint8_t glow_a = (uint8_t)(FOG_GLOW_ALPHA * 255.0f);
 	for (int i = 0; i < NUM_PILOTS; i++) {
@@ -377,6 +393,7 @@ void fog_draw(void) {
 		}
 	}
 
+	render_set_depth_test(true);
 	render_set_depth_offset(0.0);
 	render_set_depth_write(true);
 	render_set_blend_mode(RENDER_BLEND_NORMAL);
