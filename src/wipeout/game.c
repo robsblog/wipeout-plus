@@ -597,6 +597,7 @@ save_t save = {
 	.post_effect = 0,
 	.metallic_shimmer = true,
 	.fog = true,
+	.debris = true,
 
 	.has_rapier_class = true,  // for testing; should be false in prod
 	.has_bonus_circuts = true, // for testing; should be false in prod
@@ -878,6 +879,13 @@ void game_init(void) {
 		// scene_load re-applies save.fog.
 		save.fog = (fog_env[0] == '1');
 		render_set_fog(save.fog, rgba(128, 128, 150, 255));
+	}
+
+	const char *debris_env = getenv("WIPEOUT_DEBRIS");
+	if (debris_env) {
+		// Debug override: update the in-memory save flag (not marked dirty, so
+		// not persisted) so it survives track load. A/B testing.
+		save.debris = (debris_env[0] == '1');
 	}
 
 	srand((int)(platform_now() * 100));

@@ -20,6 +20,7 @@
 #include "particle.h"
 #include "fog.h"
 #include "trail.h"
+#include "debris.h"
 #include "menu.h"
 #include "ship_ai.h"
 #include "ingame_menus.h"
@@ -85,6 +86,7 @@ void race_update(void) {
 		camera_update(&g.camera, &g.ships[g.pilot], &g.droid);
 		weapons_update();
 		particles_update();
+		debris_update();
 		fog_update();
 		trail_update();
 		scene_update();
@@ -121,6 +123,7 @@ void race_update(void) {
 	droid_draw(&g.droid);
 	weapons_draw();
 	particles_draw();
+	debris_draw();
 	fog_draw();
 	trail_draw();
 
@@ -154,6 +157,7 @@ void race_start(void) {
 	ships_init(g.track.sections);
 	droid_init(&g.droid, &g.ships[g.pilot]);
 	particles_init();
+	debris_init();
 	fog_init();
 	trail_init();
 	weapons_init();
