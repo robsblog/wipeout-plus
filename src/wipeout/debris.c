@@ -42,6 +42,12 @@
 // Dev-hit helper: force a hit on the player ship every N seconds.
 #define DEBRIS_DEV_HIT_INTERVAL 2.0f
 
+// Physics (SPARK/CHUNK)
+#define DEBRIS_GRAVITY      4000.0f  // u/s^2 along -face_normal (toward the road)
+#define DEBRIS_RESTITUTION  0.4f     // velocity kept per bounce
+#define DEBRIS_REST_SPEED   120.0f   // below this after a bounce -> come to rest
+#define DEBRIS_REST_DAMP    0.02f    // fraction of tangential speed kept per second at rest
+
 typedef enum {
     DEBRIS_KIND_SPARK, // small, additive, physics + bounce
     DEBRIS_KIND_CHUNK, // larger, additive, physics + bounce
@@ -161,7 +167,47 @@ void debris_update(void) {
             debris_pool[i--] = debris_pool[--debris_active];
             continue;
         }
-        d->pos = vec3_add(d->pos, vec3_mulf(d->vel, dt));
+
+        if (d->kind == DEBRIS_KIND_SMOKE) {
+            d->pos = vec3_add(d->pos, vec3_mulf(d->vel, dt)); // buoyancy filled in Task 4
+            continue;
+        }
+
+        // Refresh the cached section + base face for the surface query.
+        d->section = track_nearest_section(d->pos, vec3(1,1,1), d->section, NULL);
+        track_face_t *face = track_section_get_base_face(d->section);
+        vec3_t n = face->normal;                       // +normal is UP, away from the road
+        vec3_t face_point = face->tris[0].vertices[0].pos;
+
+        if (d->state == DEBRIS_FLYING) {
+            // Gravity pulls toward the road: along -normal (see Global Constraints).
+            d->vel = vec3_add(d->vel, vec3_mulf(n, -DEBRIS_GRAVITY * dt));
+            d->pos = vec3_add(d->pos, vec3_mulf(d->vel, dt));
+
+            float h = vec3_distance_to_plane(d->pos, face_point, n);
+            if (h < 0.0f) {
+                // Clamp back onto the surface (h<0 -> -n*h moves +normal, up).
+                d->pos = vec3_sub(d->pos, vec3_mulf(n, h));
+                if (d->bounces_left > 0) {
+                    d->vel = vec3_mulf(vec3_reflect(d->vel, n, 2), DEBRIS_RESTITUTION);
+                    d->bounces_left--;
+                }
+                else {
+                    d->state = DEBRIS_RESTING;
+                }
+                if (vec3_len(d->vel) < DEBRIS_REST_SPEED) {
+                    d->state = DEBRIS_RESTING;
+                }
+            }
+        }
+        else { // DEBRIS_RESTING: roll out along the surface, strong friction
+            float vn = vec3_dot(d->vel, n);
+            d->vel = vec3_sub(d->vel, vec3_mulf(n, vn));        // keep tangential only
+            d->vel = vec3_mulf(d->vel, powf(DEBRIS_REST_DAMP, dt)); // frame-rate independent
+            d->pos = vec3_add(d->pos, vec3_mulf(d->vel, dt));
+            float h = vec3_distance_to_plane(d->pos, face_point, n);
+            d->pos = vec3_sub(d->pos, vec3_mulf(n, h));         // stay glued to the surface
+        }
     }
 }
 
