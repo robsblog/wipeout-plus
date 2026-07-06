@@ -16,6 +16,212 @@
 #include "race.h"
 #include "sfx.h"
 
+// Per-ship-model range into the shared ship-sheen vertex buffer (see
+// render_ship_sheen_*). Built once in ships_load from each ship's model.
+static struct {
+	int first_vertex;
+	int vertex_count;
+} ship_sheen_ranges[len(g.ships)];
+
+// Below this squared length an accumulated/face normal is treated as zero.
+// Face normals come from cross products of raw model coordinates, so genuine
+// normals have very large magnitudes and this cleanly separates degenerate ones.
+#define SHEEN_NORMAL_EPS 1e-6f
+
+// One emitted sheen triangle, recorded in the exact coord/uv order object_draw
+// uses so the two smoothing passes stay bit-for-bit in sync with the walk.
+typedef struct {
+	int coord0, coord1, coord2; // object vertex indices
+	float u0, v0, u1, v1, u2, v2;
+	int16_t texture;
+} sheen_tri_t;
+
+// Emit one sheen triangle into `out` at index `n`, using explicit per-vertex
+// (smoothed) normals. UVs are offset into atlas pixel coordinates exactly like
+// render_push_tris. Only ever called with out != NULL.
+static int ship_sheen_emit_tri(
+	ship_sheen_vertex_t *out, int n,
+	vec3_t p0, vec3_t p1, vec3_t p2,
+	vec3_t n0, vec3_t n1, vec3_t n2,
+	float u0, float v0, float u1, float v1, float u2, float v2,
+	int16_t texture
+) {
+	vec2i_t off = render_atlas_offset(texture);
+	out[n + 0] = (ship_sheen_vertex_t){ .pos = p0, .normal = n0, .uv = {u0 + off.x, v0 + off.y} };
+	out[n + 1] = (ship_sheen_vertex_t){ .pos = p1, .normal = n1, .uv = {u1 + off.x, v1 + off.y} };
+	out[n + 2] = (ship_sheen_vertex_t){ .pos = p2, .normal = n2, .uv = {u2 + off.x, v2 + off.y} };
+	return n + 3;
+}
+
+// Walk the ship model's primitive list exactly like object_draw and record the
+// textured triangles (GT3/GT4/FT3/FT4) that receive sheen. Untextured /
+// non-triangle prims contribute no triangle but still advance the pointer so the
+// walk stays in sync. Pass tris == NULL to only count. Returns the triangle count.
+static int ship_model_collect_tris(Object *model, sheen_tri_t *tris) {
+	Prm poly = {.primitive = model->primitives};
+	int n = 0;
+
+	for (int i = 0; i < model->primitives_len; i++) {
+		switch (poly.primitive->type) {
+		case PRM_TYPE_GT3:
+			if (tris) tris[n] = (sheen_tri_t){
+				.coord0 = poly.gt3->coords[2], .coord1 = poly.gt3->coords[1], .coord2 = poly.gt3->coords[0],
+				.u0 = poly.gt3->u2, .v0 = poly.gt3->v2, .u1 = poly.gt3->u1, .v1 = poly.gt3->v1, .u2 = poly.gt3->u0, .v2 = poly.gt3->v0,
+				.texture = poly.gt3->texture };
+			n += 1;
+			poly.gt3 += 1;
+			break;
+
+		case PRM_TYPE_GT4:
+			if (tris) tris[n] = (sheen_tri_t){
+				.coord0 = poly.gt4->coords[2], .coord1 = poly.gt4->coords[1], .coord2 = poly.gt4->coords[0],
+				.u0 = poly.gt4->u2, .v0 = poly.gt4->v2, .u1 = poly.gt4->u1, .v1 = poly.gt4->v1, .u2 = poly.gt4->u0, .v2 = poly.gt4->v0,
+				.texture = poly.gt4->texture };
+			n += 1;
+			if (tris) tris[n] = (sheen_tri_t){
+				.coord0 = poly.gt4->coords[2], .coord1 = poly.gt4->coords[3], .coord2 = poly.gt4->coords[1],
+				.u0 = poly.gt4->u2, .v0 = poly.gt4->v2, .u1 = poly.gt4->u3, .v1 = poly.gt4->v3, .u2 = poly.gt4->u1, .v2 = poly.gt4->v1,
+				.texture = poly.gt4->texture };
+			n += 1;
+			poly.gt4 += 1;
+			break;
+
+		case PRM_TYPE_FT3:
+			if (tris) tris[n] = (sheen_tri_t){
+				.coord0 = poly.ft3->coords[2], .coord1 = poly.ft3->coords[1], .coord2 = poly.ft3->coords[0],
+				.u0 = poly.ft3->u2, .v0 = poly.ft3->v2, .u1 = poly.ft3->u1, .v1 = poly.ft3->v1, .u2 = poly.ft3->u0, .v2 = poly.ft3->v0,
+				.texture = poly.ft3->texture };
+			n += 1;
+			poly.ft3 += 1;
+			break;
+
+		case PRM_TYPE_FT4:
+			if (tris) tris[n] = (sheen_tri_t){
+				.coord0 = poly.ft4->coords[2], .coord1 = poly.ft4->coords[1], .coord2 = poly.ft4->coords[0],
+				.u0 = poly.ft4->u2, .v0 = poly.ft4->v2, .u1 = poly.ft4->u1, .v1 = poly.ft4->v1, .u2 = poly.ft4->u0, .v2 = poly.ft4->v0,
+				.texture = poly.ft4->texture };
+			n += 1;
+			if (tris) tris[n] = (sheen_tri_t){
+				.coord0 = poly.ft4->coords[2], .coord1 = poly.ft4->coords[3], .coord2 = poly.ft4->coords[1],
+				.u0 = poly.ft4->u2, .v0 = poly.ft4->v2, .u1 = poly.ft4->u3, .v1 = poly.ft4->v3, .u2 = poly.ft4->u1, .v2 = poly.ft4->v1,
+				.texture = poly.ft4->texture };
+			n += 1;
+			poly.ft4 += 1;
+			break;
+
+		// Untextured / non-triangle prims: no sheen, but keep the walk in sync.
+		case PRM_TYPE_G3:  poly.g3  += 1; break;
+		case PRM_TYPE_G4:  poly.g4  += 1; break;
+		case PRM_TYPE_F3:  poly.f3  += 1; break;
+		case PRM_TYPE_F4:  poly.f4  += 1; break;
+		case PRM_TYPE_TSPR:
+		case PRM_TYPE_BSPR: poly.spr += 1; break;
+		default:
+			break;
+		}
+	}
+	return n;
+}
+
+// Build the sheen geometry for one ship model in model space. Instead of a flat
+// per-face normal (which reads as painted-on blotches on these low-poly hulls),
+// smooth normals are averaged per object vertex: two passes over the emitted
+// triangles accumulate area-weighted face normals into shared vertices, then
+// emit uses the normalized average. Returns the vertex count; pass out == NULL
+// to only count.
+static int ship_model_build_sheen(Object *model, ship_sheen_vertex_t *out) {
+	int tri_count = ship_model_collect_tris(model, NULL);
+	if (!out || tri_count == 0) {
+		return tri_count * 3;
+	}
+
+	vec3_t *vertex = model->vertices;
+	int vlen = model->vertices_len;
+
+	// Gather the emitted triangles once (same walk as object_draw), then smooth.
+	sheen_tri_t *tris = mem_temp_alloc(sizeof(sheen_tri_t) * tri_count);
+	ship_model_collect_tris(model, tris);
+
+	// accum: summed (area-weighted) face normals per vertex. fallback: one valid
+	// unit face normal per vertex, used if the accumulated normal cancels to zero
+	// so a vertex never ends up with a NaN normal.
+	vec3_t *accum = mem_temp_alloc(sizeof(vec3_t) * vlen);
+	vec3_t *fallback = mem_temp_alloc(sizeof(vec3_t) * vlen);
+	for (int i = 0; i < vlen; i++) {
+		accum[i] = vec3(0, 0, 0);
+		fallback[i] = vec3(0, 0, 0);
+	}
+
+	// Pass 1: accumulate unnormalized (area-weighted) face normals per vertex.
+	for (int i = 0; i < tri_count; i++) {
+		sheen_tri_t *t = &tris[i];
+		vec3_t fn = vec3_cross(
+			vec3_sub(vertex[t->coord1], vertex[t->coord0]),
+			vec3_sub(vertex[t->coord2], vertex[t->coord0]));
+		accum[t->coord0] = vec3_add(accum[t->coord0], fn);
+		accum[t->coord1] = vec3_add(accum[t->coord1], fn);
+		accum[t->coord2] = vec3_add(accum[t->coord2], fn);
+		if (vec3_len_sq(fn) > SHEEN_NORMAL_EPS) {
+			vec3_t fnn = vec3_normalize(fn);
+			fallback[t->coord0] = fnn;
+			fallback[t->coord1] = fnn;
+			fallback[t->coord2] = fnn;
+		}
+	}
+
+	// Normalize the averaged normals, guarding against a zero vector.
+	for (int i = 0; i < vlen; i++) {
+		if (vec3_len_sq(accum[i]) > SHEEN_NORMAL_EPS) {
+			accum[i] = vec3_normalize(accum[i]);
+		}
+		else if (vec3_len_sq(fallback[i]) > SHEEN_NORMAL_EPS) {
+			accum[i] = fallback[i];
+		}
+		else {
+			accum[i] = vec3(0, -1, 0); // world up; sign fixed up two-sided in the FS
+		}
+	}
+
+	// Pass 2: emit with the smoothed per-vertex normals (pos/uv unchanged).
+	int n = 0;
+	for (int i = 0; i < tri_count; i++) {
+		sheen_tri_t *t = &tris[i];
+		n = ship_sheen_emit_tri(out, n,
+			vertex[t->coord0], vertex[t->coord1], vertex[t->coord2],
+			accum[t->coord0], accum[t->coord1], accum[t->coord2],
+			t->u0, t->v0, t->u1, t->v1, t->u2, t->v2,
+			t->texture);
+	}
+
+	mem_temp_free(fallback);
+	mem_temp_free(accum);
+	mem_temp_free(tris);
+	return n;
+}
+
+// Build one shared vertex buffer holding every ship model's sheen geometry and
+// record each ship's range. Called once after the ship models are loaded.
+static void ships_upload_sheen(void) {
+	int total = 0;
+	for (int i = 0; i < len(g.ships); i++) {
+		ship_sheen_ranges[i].first_vertex = total;
+		ship_sheen_ranges[i].vertex_count = ship_model_build_sheen(g.ships[i].model, NULL);
+		total += ship_sheen_ranges[i].vertex_count;
+	}
+
+	if (total == 0) {
+		render_ship_sheen_upload(NULL, 0);
+		return;
+	}
+
+	ship_sheen_vertex_t *verts = mem_temp_alloc(sizeof(ship_sheen_vertex_t) * total);
+	for (int i = 0; i < len(g.ships); i++) {
+		ship_model_build_sheen(g.ships[i].model, verts + ship_sheen_ranges[i].first_vertex);
+	}
+	render_ship_sheen_upload(verts, total);
+	mem_temp_free(verts);
+}
+
 void ships_load(void) {
 	texture_list_t ship_textures = image_get_compressed_textures("wipeout/common/allsh.cmp");
 	Object *ship_models = objects_load("wipeout/common/allsh.prm", ship_textures);
@@ -49,6 +255,8 @@ void ships_load(void) {
 	for (int i = 0; i < len(g.ships); i++) {
 		g.ships[i].shadow_texture = shadow_textures_start + (i >> 1);
 	}
+
+	ships_upload_sheen();
 }
 
 
@@ -184,6 +392,24 @@ void ships_draw(void) {
 
 	render_set_depth_offset(0.0);
 	render_set_depth_write(true);
+}
+
+
+// Additive metallic sheen overlay, drawn after the ships. Mirrors the model
+// visibility test in ships_draw so the sheen covers exactly the ships that were
+// drawn, and uses each ship's model matrix so the overlay depth matches.
+void ships_draw_sheen(void) {
+	render_ship_sheen_begin();
+	for (int i = 0; i < len(g.ships); i++) {
+		if (
+			(flags_is(g.ships[i].flags, SHIP_VIEW_INTERNAL) && flags_not(g.ships[i].flags, SHIP_IN_RESCUE)) ||
+			(g.race_type == RACE_TYPE_TIME_TRIAL && i != g.pilot)
+		) {
+			continue;
+		}
+		render_ship_sheen_draw(&g.ships[i].mat, ship_sheen_ranges[i].first_vertex, ship_sheen_ranges[i].vertex_count);
+	}
+	render_ship_sheen_end();
 }
 
 

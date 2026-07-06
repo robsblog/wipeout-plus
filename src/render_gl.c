@@ -409,39 +409,43 @@ static const char * const SHADER_SHIMMER_FS = SHADER_SOURCE(
 		vec3 V = normalize(v_view_dir_ws);
 		vec3 R = reflect(-V, N);
 
-		// --- Environment reflection: heavily blurred + desaturated steel sheen.
-		// The wide-spread taps roughen the mirror so bright skies look natural
-		// rather than a sharp wet reflection; the desaturation keeps it reading
-		// as metal (grey) instead of water (coloured). ---
-		vec3 reflected = textureCube(env, R).rgb;
-		reflected += textureCube(env, R + vec3( 0.30, 0.0,  0.0)).rgb;
-		reflected += textureCube(env, R + vec3(-0.30, 0.0,  0.0)).rgb;
-		reflected += textureCube(env, R + vec3( 0.0,  0.30, 0.0)).rgb;
-		reflected += textureCube(env, R + vec3( 0.0, -0.30, 0.0)).rgb;
-		reflected += textureCube(env, R + vec3( 0.0,  0.0,  0.30)).rgb;
-		reflected += textureCube(env, R + vec3( 0.0,  0.0, -0.30)).rgb;
-		reflected *= (1.0 / 7.0);
+		// --- Environment reflection: SHARP + structured, dim overall.
+		// A tight 5-tap cross (small offset) keeps the sky reflection readable
+		// and slightly stretched instead of a grey wash, with just enough
+		// smoothing to avoid single-tap aliasing on the 128px cube. Only lightly
+		// desaturated so the reflection keeps colour and contrast (structure),
+		// while a cool steel tint stops it reading as water. ---
+		vec3 reflected = textureCube(env, R).rgb * 2.0;
+		reflected += textureCube(env, R + vec3( 0.05, 0.0,  0.0)).rgb;
+		reflected += textureCube(env, R + vec3(-0.05, 0.0,  0.0)).rgb;
+		reflected += textureCube(env, R + vec3( 0.0,  0.05, 0.0)).rgb;
+		reflected += textureCube(env, R + vec3( 0.0, -0.05, 0.0)).rgb;
+		reflected *= (1.0 / 6.0);
 		float luma = dot(reflected, vec3(0.299, 0.587, 0.114));
-		reflected = mix(reflected, vec3(luma) * vec3(0.90, 0.95, 1.05), 0.7);
+		reflected = mix(reflected, vec3(luma) * vec3(0.90, 0.95, 1.05), 0.30);
 
 		float NdV = max(dot(N, V), 0.0);
-		// Broad angle response so the reflection is visible across the whole
-		// range of driving angles, not just the steep look-down after a jump.
-		float env_w = 0.30 + 0.50 * (pow(1.0 - NdV, 2.0) + pow(NdV, 1.5));
+		// Tighter, more grazing-angle-weighted response so the reflection reads
+		// as a directional sheen on a dark surface rather than an everywhere
+		// wash. Base term is low: the road stays dark, the reflection is the
+		// bright element.
+		float env_w = 0.08 + 0.55 * pow(1.0 - NdV, 3.0) + 0.15 * pow(NdV, 2.0);
 
 		// --- Specular highlighting from fixed key lights (Blinn-Phong). Unlike
 		// the reflection this comes from a light, not the environment, so it
 		// still glints on dark tracks and gives the concentrated polished-metal
-		// highlight a pure reflection lacks. World up is -Y. ---
+		// highlight a pure reflection lacks. Sharpened exponent = tight, hard
+		// glints. World up is -Y. ---
 		vec3 spec = vec3(0.0);
 		vec3 h1 = normalize(normalize(vec3( 0.35, -1.0,  0.25)) + V);
-		spec += vec3(1.00, 0.97, 0.90) * pow(max(dot(N, h1), 0.0), 22.0);
+		spec += vec3(1.00, 0.97, 0.90) * pow(max(dot(N, h1), 0.0), 80.0);
 		vec3 h2 = normalize(normalize(vec3(-0.40, -1.0, -0.30)) + V);
-		spec += vec3(0.85, 0.92, 1.00) * pow(max(dot(N, h2), 0.0), 22.0);
+		spec += vec3(0.85, 0.92, 1.00) * pow(max(dot(N, h2), 0.0), 80.0);
 
 		// Additive blend (SRC_ALPHA, ONE) with alpha = 1: the reflection sheen
-		// plus the specular glints are added to the road.
-		vec3 result = reflected * env_w * 0.7 + spec * 0.9;
+		// plus the specular glints are added to the road. Reflection scaled
+		// well down (dark surface); glints kept punchy.
+		vec3 result = reflected * env_w * 0.40 + spec * 1.1;
 		gl_FragColor = vec4(result * intensity, 1.0);
 	}
 );
@@ -499,6 +503,150 @@ static prg_shimmer_t *shader_shimmer_init(void) {
 
 
 // -----------------------------------------------------------------------------
+// Ship metallic sheen
+//
+// An additive overlay over the ships (analogous to the track shimmer) that adds
+// a metallic glint. It reads the ship's diffuse colour from the atlas to build a
+// metalness mask: dark texels read as bare metal (sharp warm titanium glint),
+// bright texels read as painted panels (broad, soft, dim sheen). Geometry is
+// built once per ship model in model space (see ship.c) and drawn per ship with
+// that ship's model matrix, so the depth matches the ship pass exactly.
+
+static const char * const SHADER_SHIP_SHEEN_VS = SHADER_SOURCE(
+	attribute vec3 pos;
+	attribute vec3 normal;
+	attribute vec2 uv;
+
+	uniform mat4 view;
+	uniform mat4 model;
+	uniform mat4 projection;
+	uniform vec3 camera_pos;
+
+	varying vec3 v_normal_ws;
+	varying vec3 v_view_dir_ws;
+	varying vec2 v_uv;
+
+	void main(void) {
+		// Same transform expression as the game shader so depth is bit-identical
+		// to the ship pass (avoids z-fighting on the overlay).
+		gl_Position = projection * view * model * vec4(pos, 1.0);
+		vec3 world_pos = (model * vec4(pos, 1.0)).xyz;
+		v_normal_ws = mat3(model[0].xyz, model[1].xyz, model[2].xyz) * normal;
+		v_view_dir_ws = camera_pos - world_pos;
+		v_uv = uv / 2048.0; // ATLAS_GRID * ATLAS_SIZE
+	}
+);
+
+static const char * const SHADER_SHIP_SHEEN_FS = SHADER_SOURCE(
+	varying vec3 v_normal_ws;
+	varying vec3 v_view_dir_ws;
+	varying vec2 v_uv;
+
+	uniform float intensity;
+	uniform sampler2D atlas;
+
+	// --- Tuning constants (start values; tweak here) ---
+	// Rim-only ship sheen: a bright specular band along the silhouette. No
+	// surface highlight (that lit interior polygons); just the outline.
+	const vec3  SHEEN_METAL_TINT     = vec3(1.0, 0.93, 0.82);  // warm titanium
+	// Metalness mask from texture luminance: below LO = full metal, above HI =
+	// full paint, smoothstep between them. Only used to tint the rim (warm on
+	// dark/metal, neutral on bright/paint).
+	const float SHEEN_LUMA_LO        = 0.25;
+	const float SHEEN_LUMA_HI        = 0.42;
+	// Rim/edge specular. High EXP keeps the band tight to the outline so
+	// interior polygon creases fall off fast; STRENGTH sets the contrast
+	// (kept soft/dampened rather than a harsh bright line).
+	const float SHEEN_RIM_EXP        = 6.0;
+	const float SHEEN_RIM_STRENGTH   = 0.8;
+	// Underside gate: the belly of the ship sits in shadow and shouldn't catch
+	// the sheen. Fade the rim out on downward-facing surfaces. World up is -Y,
+	// so up = dot(N, -Y): +1 faces up, 0 sideways, -1 faces down. Below LO =
+	// no rim (belly), above HI = full (top/sides). Back faces are culled, so
+	// visible normals point outward and this test is reliable.
+	const float SHEEN_UP_LO          = -0.55;
+	const float SHEEN_UP_HI          = -0.05;
+
+	void main(void) {
+		vec3 diffuse = texture2D(atlas, v_uv).rgb;
+		float luma = dot(diffuse, vec3(0.299, 0.587, 0.114));
+		// dark surface -> metal (1.0), bright surface -> paint (0.0)
+		float metal = 1.0 - smoothstep(SHEEN_LUMA_LO, SHEEN_LUMA_HI, luma);
+
+		vec3 N = normalize(v_normal_ws);
+		vec3 V = normalize(v_view_dir_ws);
+
+		// Rim/edge specular only. High exponent concentrates the band on the
+		// grazing-angle silhouette; warm titanium tint on metal, neutral on paint.
+		float rim = pow(1.0 - max(dot(N, V), 0.0), SHEEN_RIM_EXP);
+		// Suppress on the shadowed underside (downward-facing surfaces).
+		float up = dot(N, vec3(0.0, -1.0, 0.0));
+		rim *= smoothstep(SHEEN_UP_LO, SHEEN_UP_HI, up);
+
+		vec3 rim_tint = mix(vec3(1.0), SHEEN_METAL_TINT, metal);
+		vec3 result = rim_tint * rim * SHEEN_RIM_STRENGTH;
+
+		gl_FragColor = vec4(result * intensity, 1.0);
+	}
+);
+
+typedef struct {
+	GLuint program;
+	GLuint vao;
+	GLuint vbo;
+	int vertex_count;
+	struct {
+		GLuint view;
+		GLuint model;
+		GLuint projection;
+		GLuint camera_pos;
+		GLuint intensity;
+		GLuint atlas;
+	} uniform;
+	struct {
+		GLuint pos;
+		GLuint normal;
+		GLuint uv;
+	} attribute;
+} prg_ship_sheen_t;
+
+#define SHIP_SHEEN_INTENSITY 1.0
+
+static prg_ship_sheen_t *shader_ship_sheen_init(void) {
+	prg_ship_sheen_t *s = mem_bump(sizeof(prg_ship_sheen_t));
+	s->program = create_program(SHADER_SHIP_SHEEN_VS, SHADER_SHIP_SHEEN_FS);
+	s->vertex_count = 0;
+
+	s->uniform.view = glGetUniformLocation(s->program, "view");
+	s->uniform.model = glGetUniformLocation(s->program, "model");
+	s->uniform.projection = glGetUniformLocation(s->program, "projection");
+	s->uniform.camera_pos = glGetUniformLocation(s->program, "camera_pos");
+	s->uniform.intensity = glGetUniformLocation(s->program, "intensity");
+	s->uniform.atlas = glGetUniformLocation(s->program, "atlas");
+
+	s->attribute.pos = glGetAttribLocation(s->program, "pos");
+	s->attribute.normal = glGetAttribLocation(s->program, "normal");
+	s->attribute.uv = glGetAttribLocation(s->program, "uv");
+
+	glGenVertexArrays(1, &s->vao);
+	glBindVertexArray(s->vao);
+
+	glGenBuffers(1, &s->vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, s->vbo);
+
+	glEnableVertexAttribArray(s->attribute.pos);
+	glEnableVertexAttribArray(s->attribute.normal);
+	glEnableVertexAttribArray(s->attribute.uv);
+	bind_va_f(s->attribute.pos, ship_sheen_vertex_t, pos, 0);
+	bind_va_f(s->attribute.normal, ship_sheen_vertex_t, normal, 0);
+	bind_va_f(s->attribute.uv, ship_sheen_vertex_t, uv, 0);
+
+	return s;
+}
+
+
+
+// -----------------------------------------------------------------------------
 
 static GLuint vbo;
 
@@ -543,6 +691,9 @@ static prg_shimmer_t *prg_shimmer = NULL;
 static bool metallic_shimmer_enabled = true;
 static bool shimmer_pass_active = false;
 static vec3_t shimmer_cam_pos;
+static prg_ship_sheen_t *prg_ship_sheen = NULL;
+static bool ship_sheen_enabled = true;
+static bool ship_sheen_pass_active = false;
 prg_post_t *prg_post;
 prg_post_t *prg_post_effects[NUM_RENDER_POST_EFFCTS] = {};
 
@@ -613,6 +764,7 @@ void render_init(vec2i_t screen_size) {
 
 	prg_game = shader_game_init();
 	prg_shimmer = shader_shimmer_init();
+	prg_ship_sheen = shader_ship_sheen_init();
 	use_program(prg_game);
 
 	render_set_view(vec3(0, 0, 0), vec3(0, 0, 0));
@@ -1014,6 +1166,96 @@ void render_track_shimmer_end(void) {
 
 void render_set_metallic_shimmer(bool enabled) {
 	metallic_shimmer_enabled = enabled;
+}
+
+vec2i_t render_atlas_offset(uint16_t texture_index) {
+	error_if(texture_index >= textures_len, "Invalid texture %d", texture_index);
+	return textures[texture_index].offset;
+}
+
+// The ship sheen geometry is built once per ship model in model space and
+// uploaded as one buffer (see ship.c). The pass is drawn per ship via begin /
+// draw / end: begin sets up the program and GL state once and clears
+// ship_sheen_pass_active when disabled so draw/end become no-ops. draw sets the
+// per-ship model matrix and issues the range.
+void render_ship_sheen_upload(ship_sheen_vertex_t *verts, int count) {
+	glBindVertexArray(prg_ship_sheen->vao);
+	glBindBuffer(GL_ARRAY_BUFFER, prg_ship_sheen->vbo);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(ship_sheen_vertex_t) * count, verts, GL_STATIC_DRAW);
+	prg_ship_sheen->vertex_count = count;
+
+	// Restore the game program/VAO and the shared tris buffer binding.
+	use_program(prg_game);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+}
+
+void render_ship_sheen_begin(void) {
+	ship_sheen_pass_active = false;
+	if (!ship_sheen_enabled || !prg_ship_sheen || prg_ship_sheen->vertex_count == 0) {
+		return;
+	}
+	ship_sheen_pass_active = true;
+
+	// Draw any pending game tris (the ships etc.) so their depth is written first.
+	render_flush();
+
+	use_program(prg_ship_sheen);
+	glUniformMatrix4fv(prg_ship_sheen->uniform.view, 1, false, view_mat.m);
+	glUniformMatrix4fv(prg_ship_sheen->uniform.projection, 1, false, projection_mat_3d.m);
+	glUniform3f(prg_ship_sheen->uniform.camera_pos, shimmer_cam_pos.x, shimmer_cam_pos.y, shimmer_cam_pos.z);
+	glUniform1f(prg_ship_sheen->uniform.intensity, SHIP_SHEEN_INTENSITY);
+
+	// Sample the ship diffuse from the shared atlas on unit 0.
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, atlas_texture);
+	glUniform1i(prg_ship_sheen->uniform.atlas, 0);
+
+	glDepthMask(false);                 // overlay: don't write depth
+	glDepthFunc(GL_LEQUAL);             // pass at equal depth to the ship
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE);  // additive metallic highlights
+}
+
+void render_ship_sheen_draw(mat4_t *model, int first_vertex, int vertex_count) {
+	if (!ship_sheen_pass_active || first_vertex < 0 || vertex_count <= 0) {
+		return;
+	}
+	// Clamp defensively to the uploaded buffer.
+	if (first_vertex + vertex_count > prg_ship_sheen->vertex_count) {
+		vertex_count = prg_ship_sheen->vertex_count - first_vertex;
+		if (vertex_count <= 0) {
+			return;
+		}
+	}
+
+	glUniformMatrix4fv(prg_ship_sheen->uniform.model, 1, false, model->m);
+	glDrawArrays(GL_TRIANGLES, first_vertex, vertex_count);
+
+	running_stats.num_tris += vertex_count / 3;
+	running_stats.num_draw_calls++;
+}
+
+void render_ship_sheen_end(void) {
+	if (!ship_sheen_pass_active) {
+		return;
+	}
+	ship_sheen_pass_active = false;
+
+	// Restore state for subsequent game-program draws.
+	glDepthFunc(GL_LESS);
+	glDepthMask(true);
+	if (blend_mode == RENDER_BLEND_LIGHTER) {
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+	}
+	else {
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	}
+	use_program(prg_game);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	glActiveTexture(GL_TEXTURE0);
+}
+
+void render_set_ship_sheen(bool enabled) {
+	ship_sheen_enabled = enabled;
 }
 
 // gluLookAt-style pure-rotation view matrix (eye at origin, looks down -Z).

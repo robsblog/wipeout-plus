@@ -596,6 +596,7 @@ save_t save = {
 	.screen_res = 0,
 	.post_effect = 0,
 	.metallic_shimmer = true,
+	.ship_sheen = true,
 	.fog = true,
 	.debris = true,
 
@@ -868,6 +869,15 @@ void game_init(void) {
 		const char *sh = getenv("WIPEOUT_SHIMMER");
 		if (sh) {
 			render_set_metallic_shimmer(atoi(sh) != 0);
+		}
+	}
+
+	render_set_ship_sheen(save.ship_sheen);
+	// Dev override: WIPEOUT_SHIP_SHEEN=0/1 forces the effect off/on for A/B tests.
+	{
+		const char *ss = getenv("WIPEOUT_SHIP_SHEEN");
+		if (ss) {
+			render_set_ship_sheen(atoi(ss) != 0);
 		}
 	}
 

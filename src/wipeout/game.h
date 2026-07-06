@@ -282,6 +282,7 @@ typedef struct {
 	int screen_res;
 	int post_effect;
 	bool metallic_shimmer;
+	bool ship_sheen;
 	float screen_shake;
 	bool fog;
 	bool debris;

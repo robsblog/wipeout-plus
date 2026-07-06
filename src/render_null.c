@@ -31,6 +31,24 @@ void render_track_shimmer_end(void) {}
 void render_set_metallic_shimmer(bool enabled) {
 	(void) enabled;
 }
+void render_ship_sheen_upload(ship_sheen_vertex_t *verts, int count) {
+	(void) verts;
+	(void) count;
+}
+void render_ship_sheen_begin(void) {}
+void render_ship_sheen_draw(mat4_t *model, int first_vertex, int vertex_count) {
+	(void) model;
+	(void) first_vertex;
+	(void) vertex_count;
+}
+void render_ship_sheen_end(void) {}
+void render_set_ship_sheen(bool enabled) {
+	(void) enabled;
+}
+vec2i_t render_atlas_offset(uint16_t texture_index) {
+	(void) texture_index;
+	return vec2i(0, 0);
+}
 void render_env_cube_capture(void (*draw_env)(void)) {
 	(void) draw_env;
 }
