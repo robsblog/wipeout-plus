@@ -17,6 +17,8 @@ void debris_draw(void);   // per-frame: additive embers + normal-blended smoke
 // Blast a burst of debris off a hit ship. origin = hit position, base_velocity
 // = the struck ship's velocity (debris inherits a fraction), section = the
 // ship's current track section (seed for the surface query; may be NULL).
-void debris_spawn_burst(vec3_t origin, vec3_t base_velocity, section_t *section);
+// intensity scales the burst size (1.0 = ship hit; higher = a big track-impact
+// crash from a stray weapon).
+void debris_spawn_burst(vec3_t origin, vec3_t base_velocity, section_t *section, float intensity);
 
 #endif

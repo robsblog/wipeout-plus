@@ -200,6 +200,8 @@ void weapons_update(void) {
 					vec3_t velocity = vec3_rand(512);
 					particles_spawn(weapon->position, weapon->track_hit_particle, velocity, 256);
 				}
+				// Stray weapon slamming into the track: a big debris crash.
+				debris_spawn_burst(weapon->position, weapon->velocity, weapon->section, 2.0f);
 				sfx_play_at(SFX_EXPLOSION_2, weapon->position, vec3(0,0,0), 1);
 				weapon->active = false;
 			}
@@ -284,7 +286,7 @@ ship_t *weapon_collides_with_ship(weapon_t *self) {
 
 		float distance = vec3_len(vec3_sub(ship->position, self->position));
 		if (distance < 512) {
-			debris_spawn_burst(self->position, ship->velocity, ship->section);
+			debris_spawn_burst(self->position, ship->velocity, ship->section, 1.0f);
 			return ship;
 		}
 	}
