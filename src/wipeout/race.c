@@ -19,6 +19,7 @@
 #include "race.h"
 #include "particle.h"
 #include "fog.h"
+#include "trail.h"
 #include "menu.h"
 #include "ship_ai.h"
 #include "ingame_menus.h"
@@ -85,6 +86,7 @@ void race_update(void) {
 		weapons_update();
 		particles_update();
 		fog_update();
+		trail_update();
 		scene_update();
 		if (g.race_type != RACE_TYPE_TIME_TRIAL) {
 			track_cycle_pickups();
@@ -119,6 +121,7 @@ void race_update(void) {
 	weapons_draw();
 	particles_draw();
 	fog_draw();
+	trail_draw();
 
 	// Draw 2d
 	render_set_screen_position(vec2(0,0));
@@ -151,6 +154,7 @@ void race_start(void) {
 	droid_init(&g.droid, &g.ships[g.pilot]);
 	particles_init();
 	fog_init();
+	trail_init();
 	weapons_init();
 
 	for (int i = 0; i < len(g.race_ranks); i++) {
