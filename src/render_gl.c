@@ -841,15 +841,15 @@ static void render_create_fog_texture(void) {
 			if (falloff < 0.0f) { falloff = 0.0f; }
 			falloff = falloff * falloff; // soft round edge
 
-			// fBm grain (tileable octaves) -> "sandy" internal structure.
+			// COARSE fBm grain (large cells) -> chunky particulate structure.
 			float u = (float)x / FOG_TEX_SIZE;
 			float v = (float)y / FOG_TEX_SIZE;
 			float grain =
-				0.55f * fog_vnoise(u * 6.0f,  v * 6.0f,  6) +
-				0.30f * fog_vnoise(u * 12.0f, v * 12.0f, 12) +
-				0.15f * fog_vnoise(u * 24.0f, v * 24.0f, 24);
-			// Bias toward more substance while keeping some clumping variation.
-			float a = falloff * (0.35f + 0.75f * grain);
+				0.62f * fog_vnoise(u * 3.0f,  v * 3.0f,  3) +
+				0.28f * fog_vnoise(u * 6.0f,  v * 6.0f,  6) +
+				0.10f * fog_vnoise(u * 12.0f, v * 12.0f, 12);
+			// High contrast: clumps stay dense, gaps clear -> visible coarse grain.
+			float a = falloff * (grain * 1.9f - 0.35f);
 			if (a < 0.0f) { a = 0.0f; }
 			if (a > 1.0f) { a = 1.0f; }
 			pixels[y * FOG_TEX_SIZE + x] = rgba(128, 128, 128, (uint8_t)(a * 255.0f));

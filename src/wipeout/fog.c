@@ -33,14 +33,14 @@
 #define FOG_PUFF_SIZE_VAR  1500.0f // +/- width variation
 #define FOG_PUFF_FLATTEN   0.26f   // height = width * this -> wide, low puffs hug the ground
 
-#define FOG_PUFF_MAX_ALPHA 0.58f   // per-puff opacity of a low puff; grainy tex needs more to feel dense
+#define FOG_PUFF_MAX_ALPHA 0.74f   // per-puff opacity of a low puff; grainy tex needs more to feel dense
 #define FOG_FADE_SPEED     1.5f     // alpha ramp rate toward target (1/s)
 
 // A passing ship punches a transient hole in the fog (a visible wake/cut) that
 // refills over ~1/DECAY seconds.
-#define FOG_CARVE_RADIUS   4200.0f // along-path reach of the cut
-#define FOG_CARVE_HALF_WIDTH 1500.0f // only puffs this close to the path LINE clear -> narrow trench
-#define FOG_CARVE_GAIN     2.0f    // >1 saturates the centre of the lane to fully cleared
+#define FOG_CARVE_RADIUS   3000.0f // along-path reach of the cut
+#define FOG_CARVE_HALF_WIDTH 1100.0f // only puffs this close to the path LINE clear -> narrow trench
+#define FOG_CARVE_GAIN     2.2f    // >1 saturates the centre of the lane to fully cleared
 #define FOG_DISTURB_DECAY  0.6f    // how fast the hole refills (1/s) -- slower = longer wake
 
 // Screen-fog: how strongly the shader fog fills the view when inside a zone.
@@ -64,9 +64,10 @@
 // Turbulence: a ship pushes puffs it drives near. Kick direction is the outward
 // direction (puff away from ship) blended with the ship's forward, so puffs get
 // shoved aside and trail behind. Scaled by proximity; the spring pulls them back.
-#define FOG_PUSH_RADIUS    6000.0f  // ship influences puffs within this range
-#define FOG_PUSH_ACCEL     170000.0f // sideways kick acceleration at zero distance (u/s^2)
-#define FOG_PUSH_MAX_DISP  6500.0f  // clamp puff displacement from home (u)
+#define FOG_PUSH_RADIUS    2400.0f  // NARROW: well under half track width, so only the
+                                    // fog on the ship's line parts -- sides stay intact
+#define FOG_PUSH_ACCEL     180000.0f // sideways kick acceleration at zero distance (u/s^2)
+#define FOG_PUSH_MAX_DISP  3200.0f  // clamp puff displacement from home (u)
 
 // Additive thruster glow at the exhaust mounts: a bright concentrated core plus
 // a softer halo, so it reads as a light illuminating the fog rather than a soft
