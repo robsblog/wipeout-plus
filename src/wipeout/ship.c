@@ -578,6 +578,10 @@ vec3_t ship_nose(ship_t *self) {
 	return vec3_transform(vec3(0, 0, 512), &self->mat);
 }
 
+vec3_t ship_exhaust_world(ship_t *self, int i) {
+	return vec3_transform(self->exhaust_plume[i].initial, &self->mat);
+}
+
 vec3_t ship_wing_left(ship_t *self) {
 	return vec3_transform(vec3(-256, 0, -256), &self->mat);
 }

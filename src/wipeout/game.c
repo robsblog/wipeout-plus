@@ -596,6 +596,7 @@ save_t save = {
 	.screen_res = 0,
 	.post_effect = 0,
 	.metallic_shimmer = true,
+	.fog = true,
 
 	.has_rapier_class = true,  // for testing; should be false in prod
 	.has_bonus_circuts = true, // for testing; should be false in prod
@@ -867,6 +868,16 @@ void game_init(void) {
 		if (sh) {
 			render_set_metallic_shimmer(atoi(sh) != 0);
 		}
+	}
+
+	render_set_fog(save.fog, rgba(128, 128, 150, 255));
+	const char *fog_env = getenv("WIPEOUT_FOG");
+	if (fog_env) {
+		// Debug override: also update the in-memory save flag (not marked
+		// dirty, so it is not persisted) so it survives track load, where
+		// scene_load re-applies save.fog.
+		save.fog = (fog_env[0] == '1');
+		render_set_fog(save.fog, rgba(128, 128, 150, 255));
 	}
 
 	srand((int)(platform_now() * 100));

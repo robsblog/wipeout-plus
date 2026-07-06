@@ -69,6 +69,13 @@ void render_set_blend_mode(render_blend_mode_t mode) {
 void render_set_cull_backface(bool enabled) {
 	(void) enabled;
 }
+void render_set_fog(bool enabled, rgba_t color) {
+	(void)enabled;
+	(void)color;
+}
+void render_set_fog_density(float density) {
+	(void)density;
+}
 
 vec3_t render_transform(vec3_t pos) {
 	return pos;
@@ -86,6 +93,18 @@ void render_push_2d_tile(vec2i_t pos, vec2i_t uv_offset, vec2i_t uv_size, vec2i_
 	(void) pos; (void) uv_offset; (void) uv_size; (void) size; (void) color; (void) texture_index;
 }
 
+uint16_t render_fog_texture(void) {
+	return 0;
+}
+uint16_t render_glow_texture(void) {
+	return 0;
+}
+uint16_t render_trail_texture(void) {
+	return 0;
+}
+void render_screenshot(const char *path) {
+	(void)path;
+}
 uint16_t render_texture_create(uint32_t width, uint32_t height, rgba_t *pixels) {
 	(void) width; (void) height; (void) pixels;
 	return 0;

@@ -204,6 +204,26 @@ void render_set_cull_backface(bool enabled) {
 	cull_backface_enabled = enabled;
 }
 
+// Fog / trail effects are GL-renderer only; no-ops in the software rasterizer.
+void render_set_fog(bool enabled, rgba_t color) {
+	(void)enabled; (void)color;
+}
+void render_set_fog_density(float density) {
+	(void)density;
+}
+uint16_t render_fog_texture(void) {
+	return RENDER_NO_TEXTURE;
+}
+uint16_t render_glow_texture(void) {
+	return RENDER_NO_TEXTURE;
+}
+uint16_t render_trail_texture(void) {
+	return RENDER_NO_TEXTURE;
+}
+void render_screenshot(const char *path) {
+	(void)path;
+}
+
 vec3_t render_transform(vec3_t pos) {
 	return vec4_perspective_divide(vec3_transform_perspective(vec3_transform(pos, &view_mat), &projection_mat));
 }

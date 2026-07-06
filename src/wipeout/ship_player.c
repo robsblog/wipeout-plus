@@ -104,7 +104,13 @@ void ship_player_update_intro_await_go(ship_t *self) {
 			}
 
 			self->update_timer = UPDATE_TIME_STALL;
-			self->update_func = ship_player_update_race;
+			// Dev: WIPEOUT_DEV_AI lets the player ship auto-drive (AI) so headless
+			// captures traverse the track. Inert unless the env var is set.
+			static int dev_ai = -1;
+			if (dev_ai < 0) {
+				dev_ai = getenv("WIPEOUT_DEV_AI") ? 1 : 0;
+			}
+			self->update_func = dev_ai ? ship_ai_update_race : ship_player_update_race;
 		}
 		else {
 			self->update_func = ship_ai_update_race;

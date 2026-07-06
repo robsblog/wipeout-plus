@@ -125,6 +125,8 @@ static const char * const SHADER_GAME_VS = SHADER_SOURCE(
 
 	varying vec4 v_color;
 	varying vec2 v_uv;
+	varying float v_fog_below;
+	varying float v_fog_dist;
 	uniform mat4 view;
 	uniform mat4 model;
 	uniform mat4 projection;
@@ -132,7 +134,7 @@ static const char * const SHADER_GAME_VS = SHADER_SOURCE(
 	uniform vec3 camera_pos;
 	uniform vec2 fade;
 	uniform float time;
-	
+
 	void main(void) {
 		gl_Position = projection * view * model * vec4(pos, 1.0);
 		gl_Position.xy += screen.xy * gl_Position.w;
@@ -142,13 +144,24 @@ static const char * const SHADER_GAME_VS = SHADER_SOURCE(
 			length(vec4(camera_pos, 1.0) - model * vec4(pos, 1.0))
 		);
 		v_uv = uv / 2048.0; // ATLAS_GRID * ATLAS_SIZE
+
+		// Fog inputs: how far a fragment is BELOW the camera (+Y is down, so
+		// world_y > camera_y = below) and its distance from the camera.
+		vec4 world_pos = model * vec4(pos, 1.0);
+		v_fog_below = world_pos.y - camera_pos.y;
+		v_fog_dist = length(vec4(camera_pos, 1.0) - world_pos);
 	}
 );
 
 static const char * const SHADER_GAME_FS = SHADER_SOURCE(
 	varying vec4 v_color;
 	varying vec2 v_uv;
+	varying float v_fog_below;
+	varying float v_fog_dist;
 	uniform sampler2D texture;
+	uniform vec3 fog_color;    // per-track tint, 0..1
+	uniform float fog_enabled; // 0.0 or 1.0
+	uniform float fog_density; // per-frame: ramps up while the camera is inside a fog zone
 
 	void main(void) {
 		vec4 tex_color = texture2D(texture, v_uv);
@@ -157,6 +170,17 @@ static const char * const SHADER_GAME_FS = SHADER_SOURCE(
 			discard;
 		}
 		color.rgb = color.rgb * 2.0;
+
+		// Screen-filling haze that makes you feel INSIDE the fog when in a zone:
+		// tints everything below the camera (ground) plus a distance term, all
+		// scaled by the per-frame density (0 outside zones). Camera-relative, so
+		// it works regardless of a track's absolute height.
+		float belowness = clamp(v_fog_below / 2500.0, 0.0, 1.0);
+		float dist_factor = clamp(v_fog_dist / 40000.0, 0.0, 1.0);
+		float fog_amount = fog_enabled * fog_density *
+			clamp(belowness * 0.8 + dist_factor * 0.45, 0.0, 1.0) * 0.9;
+		color.rgb = mix(color.rgb, fog_color, fog_amount);
+
 		gl_FragColor = color;
 	}
 );
@@ -172,6 +196,9 @@ typedef struct {
 		GLuint camera_pos;
 		GLuint fade;
 		GLuint time;
+		GLuint fog_color;
+		GLuint fog_enabled;
+		GLuint fog_density;
 	} uniform;
 	struct {
 		GLuint pos;
@@ -191,6 +218,9 @@ prg_game_t *shader_game_init(void) {
 	s->uniform.screen = glGetUniformLocation(s->program, "screen");
 	s->uniform.camera_pos = glGetUniformLocation(s->program, "camera_pos");
 	s->uniform.fade = glGetUniformLocation(s->program, "fade");
+	s->uniform.fog_color = glGetUniformLocation(s->program, "fog_color");
+	s->uniform.fog_enabled = glGetUniformLocation(s->program, "fog_enabled");
+	s->uniform.fog_density = glGetUniformLocation(s->program, "fog_density");
 
 	s->attribute.pos = glGetAttribLocation(s->program, "pos");
 	s->attribute.uv = glGetAttribLocation(s->program, "uv");
@@ -481,6 +511,9 @@ static vec2i_t backbuffer_size;
 static uint32_t atlas_map[ATLAS_SIZE] = {0};
 static GLuint atlas_texture = 0;
 static render_blend_mode_t blend_mode = RENDER_BLEND_NORMAL;
+static bool fog_enabled = true;
+static rgba_t fog_color = {128, 128, 128, 255};
+static float fog_density_val = 0.0f;
 
 static mat4_t projection_mat_2d = mat4_identity();
 static mat4_t projection_mat_bb = mat4_identity();
@@ -526,7 +559,11 @@ static void render_flush(void);
 // 	puts(message);
 // }
 
-void render_init(vec2i_t screen_size) {	
+static void render_create_fog_texture(void);
+static void render_create_glow_texture(void);
+static void render_create_trail_texture(void);
+
+void render_init(vec2i_t screen_size) {
 	#if defined(__APPLE__) && defined(__MACH__)
 		// OSX
 		// (nothing to do here)
@@ -593,6 +630,11 @@ void render_init(vec2i_t screen_size) {
 		rgba(128,128,128,255), rgba(128,128,128,255)
 	};
 	RENDER_NO_TEXTURE = render_texture_create(2, 2, white_pixels);
+
+	// Permanent base textures: soft fog + smooth glow + cloudy trail sprite.
+	render_create_fog_texture();
+	render_create_glow_texture();
+	render_create_trail_texture();
 
 
 	// Backbuffer
@@ -811,6 +853,10 @@ void render_set_view(vec3_t pos, vec3_t angles) {
 	glUniform3f(prg_game->uniform.camera_pos, pos.x, pos.y, pos.z);
 	glUniform2f(prg_game->uniform.fade, RENDER_FADEOUT_NEAR, RENDER_FADEOUT_FAR);
 	shimmer_cam_pos = pos;
+	glUniform1f(prg_game->uniform.fog_enabled, fog_enabled ? 1.0f : 0.0f);
+	glUniform1f(prg_game->uniform.fog_density, fog_density_val);
+	glUniform3f(prg_game->uniform.fog_color,
+		fog_color.r / 255.0f, fog_color.g / 255.0f, fog_color.b / 255.0f);
 }
 
 void render_set_view_2d(void) {
@@ -1059,6 +1105,148 @@ void render_env_cube_capture(void (*draw_env)(void)) {
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 }
 
+void render_set_fog(bool enabled, rgba_t color) {
+	fog_enabled = enabled;
+	fog_color = color;
+}
+
+void render_set_fog_density(float density) {
+	fog_density_val = density;
+}
+
+// Soft, GRAINY sprite texture for the fog-volume subsystem: a radial falloff
+// (soft edges, no hard sprite borders) multiplied by fBm value noise so each
+// puff has internal "sandy" structure. Overlapping puffs then read as a dense,
+// tangible churning substance rather than a smooth shimmer. White (neutral 128)
+// RGB. Created once as a permanent base texture (see render_create_fog_texture)
+// so its index stays below global_textures_len and survives track reloads /
+// texture resets -- otherwise a stale index aborts render_push_sprite.
+static uint16_t fog_texture_index = 0;
+
+static float fog_hash(int x, int y) {
+	uint32_t h = (uint32_t)(x * 374761393 + y * 668265263);
+	h = (h ^ (h >> 13)) * 1274126177u;
+	return ((h ^ (h >> 16)) & 0xffff) / 65535.0f;
+}
+
+// Value noise with smoothstep interpolation, tileable over `period` cells.
+static float fog_vnoise(float x, float y, int period) {
+	int xi = (int)floorf(x), yi = (int)floorf(y);
+	float fx = x - xi, fy = y - yi;
+	int x0 = xi % period, y0 = yi % period;
+	int x1 = (xi + 1) % period, y1 = (yi + 1) % period;
+	float a = fog_hash(x0, y0), b = fog_hash(x1, y0);
+	float c = fog_hash(x0, y1), d = fog_hash(x1, y1);
+	float sx = fx * fx * (3.0f - 2.0f * fx);
+	float sy = fy * fy * (3.0f - 2.0f * fy);
+	return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+
+static void render_create_fog_texture(void) {
+	#define FOG_TEX_SIZE 128
+	rgba_t pixels[FOG_TEX_SIZE * FOG_TEX_SIZE];
+	float center = (FOG_TEX_SIZE - 1) * 0.5f;
+	float radius = FOG_TEX_SIZE * 0.5f;
+	for (int y = 0; y < FOG_TEX_SIZE; y++) {
+		for (int x = 0; x < FOG_TEX_SIZE; x++) {
+			float dx = x - center;
+			float dy = y - center;
+			float r = sqrtf(dx * dx + dy * dy) / radius;
+			float falloff = 1.0f - r;
+			if (falloff < 0.0f) { falloff = 0.0f; }
+			falloff = falloff * falloff; // soft round edge
+
+			// COARSE fBm grain (large cells) -> chunky particulate structure.
+			float u = (float)x / FOG_TEX_SIZE;
+			float v = (float)y / FOG_TEX_SIZE;
+			float grain =
+				0.62f * fog_vnoise(u * 3.0f,  v * 3.0f,  3) +
+				0.28f * fog_vnoise(u * 6.0f,  v * 6.0f,  6) +
+				0.10f * fog_vnoise(u * 12.0f, v * 12.0f, 12);
+			// High contrast: clumps stay dense, gaps clear -> visible coarse grain.
+			float a = falloff * (grain * 1.9f - 0.35f);
+			if (a < 0.0f) { a = 0.0f; }
+			if (a > 1.0f) { a = 1.0f; }
+			pixels[y * FOG_TEX_SIZE + x] = rgba(128, 128, 128, (uint8_t)(a * 255.0f));
+		}
+	}
+	fog_texture_index = render_texture_create(FOG_TEX_SIZE, FOG_TEX_SIZE, pixels);
+	#undef FOG_TEX_SIZE
+}
+
+uint16_t render_fog_texture(void) {
+	return fog_texture_index;
+}
+
+// Smooth bright radial sprite (no grain): a tight glowing core with soft
+// falloff. Used for light-like effects (exhaust trail, thruster glow) so they
+// read as light, not smoke. Permanent base texture like the fog sprite.
+static uint16_t glow_texture_index = 0;
+
+static void render_create_glow_texture(void) {
+	#define GLOW_TEX_SIZE 64
+	rgba_t pixels[GLOW_TEX_SIZE * GLOW_TEX_SIZE];
+	float center = (GLOW_TEX_SIZE - 1) * 0.5f;
+	float radius = GLOW_TEX_SIZE * 0.5f;
+	for (int y = 0; y < GLOW_TEX_SIZE; y++) {
+		for (int x = 0; x < GLOW_TEX_SIZE; x++) {
+			float dx = x - center;
+			float dy = y - center;
+			float r = sqrtf(dx * dx + dy * dy) / radius;
+			float a = 1.0f - r;
+			if (a < 0.0f) { a = 0.0f; }
+			if (a > 1.0f) { a = 1.0f; }
+			a = a * a * a; // tight bright core, smooth glow falloff
+			pixels[y * GLOW_TEX_SIZE + x] = rgba(255, 255, 255, (uint8_t)(a * 255.0f));
+		}
+	}
+	glow_texture_index = render_texture_create(GLOW_TEX_SIZE, GLOW_TEX_SIZE, pixels);
+	#undef GLOW_TEX_SIZE
+}
+
+uint16_t render_glow_texture(void) {
+	return glow_texture_index;
+}
+
+// Soft, cloud-like GRAINY sprite for the exhaust trail: a gentle radial falloff
+// (big soft body) modulated by mid-frequency fBm grain, so the streak reads as
+// a glowing vapour cloud rather than a hard dot or hard smoke. Permanent base
+// texture.
+static uint16_t trail_texture_index = 0;
+
+static void render_create_trail_texture(void) {
+	#define TRAIL_TEX_SIZE 96
+	rgba_t pixels[TRAIL_TEX_SIZE * TRAIL_TEX_SIZE];
+	float center = (TRAIL_TEX_SIZE - 1) * 0.5f;
+	float radius = TRAIL_TEX_SIZE * 0.5f;
+	for (int y = 0; y < TRAIL_TEX_SIZE; y++) {
+		for (int x = 0; x < TRAIL_TEX_SIZE; x++) {
+			float dx = x - center;
+			float dy = y - center;
+			float r = sqrtf(dx * dx + dy * dy) / radius;
+			float falloff = 1.0f - r;
+			if (falloff < 0.0f) { falloff = 0.0f; }
+			falloff = falloff * falloff; // soft, large body
+
+			float u = (float)x / TRAIL_TEX_SIZE;
+			float v = (float)y / TRAIL_TEX_SIZE;
+			float grain =
+				0.55f * fog_vnoise(u * 4.0f,  v * 4.0f,  4) +
+				0.30f * fog_vnoise(u * 8.0f,  v * 8.0f,  8) +
+				0.15f * fog_vnoise(u * 16.0f, v * 16.0f, 16);
+			float a = falloff * (0.45f + 0.7f * grain); // cloudy: keeps body, adds grain
+			if (a < 0.0f) { a = 0.0f; }
+			if (a > 1.0f) { a = 1.0f; }
+			pixels[y * TRAIL_TEX_SIZE + x] = rgba(255, 255, 255, (uint8_t)(a * 255.0f));
+		}
+	}
+	trail_texture_index = render_texture_create(TRAIL_TEX_SIZE, TRAIL_TEX_SIZE, pixels);
+	#undef TRAIL_TEX_SIZE
+}
+
+uint16_t render_trail_texture(void) {
+	return trail_texture_index;
+}
 
 
 
@@ -1302,6 +1490,9 @@ void render_textures_reset(uint16_t len) {
 			rgba(128,128,128,255), rgba(128,128,128,255)
 		};
 		RENDER_NO_TEXTURE = render_texture_create(2, 2, white_pixels);
+		render_create_fog_texture();
+		render_create_glow_texture();
+		render_create_trail_texture();
 		return;
 	}
 

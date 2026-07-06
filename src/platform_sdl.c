@@ -273,7 +273,10 @@ uint32_t platform_store_userdata(const char *name, void *bytes, int32_t len) {
 		#endif
 
 		platform_gl = SDL_GL_CreateContext(window);
-		SDL_GL_SetSwapInterval(1);
+		// Dev: with WIPEOUT_SHOT_AFTER set (headless capture), disable vsync so
+		// SDL_GL_SwapWindow does not block when the window is occluded/backgrounded,
+		// which would otherwise stall the render loop before the screenshot fires.
+		SDL_GL_SetSwapInterval(getenv("WIPEOUT_SHOT_AFTER") ? 0 : 1);
 	}
 
 	void platform_prepare_frame(void) {

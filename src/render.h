@@ -59,6 +59,8 @@ void render_set_depth_offset(float offset);
 void render_set_screen_position(vec2_t pos);
 void render_set_blend_mode(render_blend_mode_t mode);
 void render_set_cull_backface(bool enabled);
+void render_set_fog(bool enabled, rgba_t color);
+void render_set_fog_density(float density);
 
 vec3_t render_transform(vec3_t pos);
 void render_push_tris(tris_t tris, uint16_t texture);
@@ -72,6 +74,9 @@ void render_env_cube_capture(void (*draw_env)(void));
 void render_push_2d(vec2i_t pos, vec2i_t size, rgba_t color, uint16_t texture);
 void render_push_2d_tile(vec2i_t pos, vec2i_t uv_offset, vec2i_t uv_size, vec2i_t size, rgba_t color, uint16_t texture_index);
 
+uint16_t render_fog_texture(void);
+uint16_t render_glow_texture(void);
+uint16_t render_trail_texture(void);
 uint16_t render_texture_create(uint32_t width, uint32_t height, rgba_t *pixels);
 vec2i_t render_texture_size(uint16_t texture_index);
 void render_texture_replace_pixels(int16_t texture_index, rgba_t *pixels);
