@@ -48,6 +48,19 @@
 #define DEBRIS_REST_SPEED   120.0f   // below this after a bounce -> come to rest
 #define DEBRIS_REST_DAMP    0.02f    // fraction of tangential speed kept per second at rest
 
+// Smoke (SMOKE)
+#define DEBRIS_SMOKE_LIFE_MIN 1.5f
+#define DEBRIS_SMOKE_LIFE_MAX 3.0f
+#define DEBRIS_SMOKE_SIZE_MIN 400.0f
+#define DEBRIS_SMOKE_SIZE_MAX 700.0f
+#define DEBRIS_SMOKE_RISE_MIN 300.0f  // buoyant speed along +face_normal (up)
+#define DEBRIS_SMOKE_RISE_MAX 700.0f
+#define DEBRIS_SMOKE_INHERIT  0.20f   // fraction of ship velocity inherited
+#define DEBRIS_SMOKE_JITTER   200.0f  // small random spread
+#define DEBRIS_SMOKE_DRAG     0.5f    // fraction of velocity kept per second
+#define DEBRIS_SMOKE_GROW     1.6f    // extra size factor over full life
+#define DEBRIS_SMOKE_ALPHA    0.5f    // peak opacity
+
 typedef enum {
     DEBRIS_KIND_SPARK, // small, additive, physics + bounce
     DEBRIS_KIND_CHUNK, // larger, additive, physics + bounce
@@ -128,7 +141,19 @@ void debris_spawn_burst(vec3_t origin, vec3_t base_velocity, section_t *section)
             rand_float(DEBRIS_CHUNK_SIZE_MIN, DEBRIS_CHUNK_SIZE_MAX),
             rand_int(1, 2));
     }
-    // Smoke puffs are added in Task 4.
+    track_face_t *bf = track_section_get_base_face(section);
+    vec3_t up = bf->normal; // +normal points up, away from the road -> buoyant
+    int puffs = rand_int(DEBRIS_SMOKE_MIN, DEBRIS_SMOKE_MAX);
+    for (int i = 0; i < puffs; i++) {
+        vec3_t v = vec3_add(
+            vec3_mulf(up, rand_float(DEBRIS_SMOKE_RISE_MIN, DEBRIS_SMOKE_RISE_MAX)),
+            vec3_mulf(base_velocity, DEBRIS_SMOKE_INHERIT));
+        v = vec3_add(v, vec3_rand(DEBRIS_SMOKE_JITTER));
+        debris_spawn_one(DEBRIS_KIND_SMOKE, origin, v, section,
+            rand_float(DEBRIS_SMOKE_LIFE_MIN, DEBRIS_SMOKE_LIFE_MAX),
+            rand_float(DEBRIS_SMOKE_SIZE_MIN, DEBRIS_SMOKE_SIZE_MAX),
+            0);
+    }
 }
 
 static void debris_dev_hit_tick(void) {
@@ -169,7 +194,8 @@ void debris_update(void) {
         }
 
         if (d->kind == DEBRIS_KIND_SMOKE) {
-            d->pos = vec3_add(d->pos, vec3_mulf(d->vel, dt)); // buoyancy filled in Task 4
+            d->vel = vec3_mulf(d->vel, powf(DEBRIS_SMOKE_DRAG, dt)); // frame-rate independent
+            d->pos = vec3_add(d->pos, vec3_mulf(d->vel, dt));
             continue;
         }
 
@@ -233,6 +259,22 @@ void debris_draw(void) {
         float flicker = 0.85f + 0.15f * sinf((float)system_cycle_time() * 40.0f + (float)i);
         int s = (int)(d->size * (d->kind == DEBRIS_KIND_CHUNK ? flicker : 1.0f));
         render_push_sprite(d->pos, vec2i(s, s), col, glow);
+    }
+
+    // Pass 2: normal-blended smoke (grey puffs that grow and fade)
+    render_set_blend_mode(RENDER_BLEND_NORMAL);
+    uint16_t smoke = render_fog_texture();
+    for (int i = 0; i < debris_active; i++) {
+        debris_t *d = &debris_pool[i];
+        if (d->kind != DEBRIS_KIND_SMOKE) {
+            continue;
+        }
+        float f = d->life / d->max_life;   // 1 birth -> 0 death
+        float a = f * DEBRIS_SMOKE_ALPHA;
+        int s = (int)(d->size * (1.0f + (1.0f - f) * DEBRIS_SMOKE_GROW));
+        uint8_t g = (uint8_t)(60.0f + 40.0f * f); // darker as it ages
+        render_push_sprite(d->pos, vec2i(s, s),
+            rgba(g, g, g, (uint8_t)(a * 255.0f)), smoke);
     }
 
     render_set_depth_offset(0.0);
