@@ -38,9 +38,14 @@
 
 // A passing ship punches a transient hole in the fog (a visible wake/cut) that
 // refills over ~1/DECAY seconds.
-#define FOG_CARVE_RADIUS   3800.0f // ship carves puffs within this range
-#define FOG_CARVE_GAIN     1.7f    // >1 saturates near passes to a fully cleared hole
-#define FOG_DISTURB_DECAY  0.7f    // how fast the hole refills (1/s) -- slower = longer wake
+#define FOG_CARVE_RADIUS   4200.0f // along-path reach of the cut
+#define FOG_CARVE_HALF_WIDTH 1500.0f // only puffs this close to the path LINE clear -> narrow trench
+#define FOG_CARVE_GAIN     2.0f    // >1 saturates the centre of the lane to fully cleared
+#define FOG_DISTURB_DECAY  0.6f    // how fast the hole refills (1/s) -- slower = longer wake
+
+// Screen-fog: how strongly the shader fog fills the view when inside a zone.
+#define FOG_DENSITY_DIST   22000.0f // camera closer than this to a zone -> screen fog ramps in
+#define FOG_SCREEN_MAX     1.0f     // peak screen-fog strength
 
 // Activation distance: a zone is active when the camera is within this range.
 #define FOG_ACTIVATE_DIST  (RENDER_FADEOUT_NEAR)
@@ -59,10 +64,9 @@
 // Turbulence: a ship pushes puffs it drives near. Kick direction is the outward
 // direction (puff away from ship) blended with the ship's forward, so puffs get
 // shoved aside and trail behind. Scaled by proximity; the spring pulls them back.
-#define FOG_PUSH_RADIUS    6500.0f  // ship influences puffs within this range
-#define FOG_PUSH_ACCEL     150000.0f // kick acceleration at zero distance (u/s^2)
-#define FOG_PUSH_FWD_BLEND 0.45f    // 0 = pure outward, 1 = pure ship-forward
-#define FOG_PUSH_MAX_DISP  6000.0f  // clamp puff displacement from home (u)
+#define FOG_PUSH_RADIUS    6000.0f  // ship influences puffs within this range
+#define FOG_PUSH_ACCEL     170000.0f // sideways kick acceleration at zero distance (u/s^2)
+#define FOG_PUSH_MAX_DISP  6500.0f  // clamp puff displacement from home (u)
 
 // Additive thruster glow at the exhaust mounts: a bright concentrated core plus
 // a softer halo, so it reads as a light illuminating the fog rather than a soft
@@ -304,6 +308,11 @@ static int fog_gather_near_ships(ship_t **out) {
 }
 
 void fog_update(void) {
+	if (!save.fog) {
+		render_set_fog_density(0.0f);
+		return;
+	}
+
 	float dt = (float)system_tick();
 	float activate_sq = FOG_ACTIVATE_DIST * FOG_ACTIVATE_DIST;
 	vec3_t cam = g.camera.position;
@@ -312,10 +321,19 @@ void fog_update(void) {
 	ship_t *near_ships[NUM_PILOTS];
 	int near_count = fog_gather_near_ships(near_ships);
 
+	// Screen-fog density: rises as the camera approaches/enters a zone so the
+	// whole view fogs up (the "inside the fog" feeling). Max over all zones.
+	float screen_density = 0.0f;
+
 	for (int i = 0; i < fog_zone_count; i++) {
 		fog_zone_t *zone = &fog_zones[i];
 		vec3_t diff = vec3_sub(cam, zone->center);
-		zone->active = (vec3_len_sq(diff) < activate_sq);
+		float dist_sq = vec3_len_sq(diff);
+		zone->active = (dist_sq < activate_sq);
+
+		float f = 1.0f - sqrtf(dist_sq) / FOG_DENSITY_DIST;
+		if (f < 0.0f) { f = 0.0f; }
+		if (f > screen_density) { screen_density = f; }
 
 		for (int j = 0; j < FOG_PUFFS_PER_ZONE; j++) {
 			fog_puff_t *p = &zone->puffs[j];
@@ -332,25 +350,31 @@ void fog_update(void) {
 			if (zone->active) {
 				for (int s = 0; s < near_count; s++) {
 					ship_t *ship = near_ships[s];
-					vec3_t away = vec3_sub(p->pos, ship->position);
-					float dist = vec3_len(away);
+					vec3_t rel = vec3_sub(p->pos, ship->position);
+					float dist = vec3_len(rel);
 					if (dist >= FOG_PUSH_RADIUS || dist < 0.0001f) {
 						continue;
 					}
-					float proximity = 1.0f - (dist / FOG_PUSH_RADIUS);
-					vec3_t out_dir = vec3_mulf(away, 1.0f / dist);
+					// Split the offset into along-path and sideways parts so the
+					// ship parts the fog to the SIDES (a narrow lane) instead of
+					// dissolving a blob around itself.
 					vec3_t fwd = vec3_normalize(
 						vec3_sub(ship_nose(ship), ship->position));
-					vec3_t dir = vec3_normalize(vec3_add(
-						vec3_mulf(out_dir, 1.0f - FOG_PUSH_FWD_BLEND),
-						vec3_mulf(fwd, FOG_PUSH_FWD_BLEND)));
+					float along = vec3_dot(rel, fwd);
+					vec3_t lateral = vec3_sub(rel, vec3_mulf(fwd, along));
+					float lat_len = vec3_len(lateral);
+					vec3_t side = (lat_len > 0.0001f)
+						? vec3_mulf(lateral, 1.0f / lat_len)
+						: vec3(1, 0, 0);
+					vec3_t dir = vec3_normalize(vec3_add(side, vec3(0, -0.15f, 0)));
+					float proximity = 1.0f - (dist / FOG_PUSH_RADIUS);
 					float accel = FOG_PUSH_ACCEL * proximity * proximity;
 					p->vel = vec3_add(p->vel, vec3_mulf(dir, accel * dt));
 
-					// Carve: close passes clear the fog, leaving a wake. Gain>1
-					// saturates the inner passes to a fully cleared hole.
-					if (dist < FOG_CARVE_RADIUS) {
-						float carve = (1.0f - dist / FOG_CARVE_RADIUS) * FOG_CARVE_GAIN;
+					// Sharp NARROW cut: only puffs near the ship's path LINE (small
+					// lateral offset) clear, leaving a crisp trench, not a big fade.
+					if (lat_len < FOG_CARVE_HALF_WIDTH && dist < FOG_CARVE_RADIUS) {
+						float carve = (1.0f - lat_len / FOG_CARVE_HALF_WIDTH) * FOG_CARVE_GAIN;
 						if (carve > 1.0f) { carve = 1.0f; }
 						if (carve > p->disturb) { p->disturb = carve; }
 					}
@@ -378,6 +402,10 @@ void fog_update(void) {
 			if (p->alpha > 1.0f) { p->alpha = 1.0f; }
 		}
 	}
+
+	// Drive the screen-filling shader fog for the "inside the fog" feeling.
+	if (screen_density > 1.0f) { screen_density = 1.0f; }
+	render_set_fog_density(screen_density * FOG_SCREEN_MAX);
 }
 
 void fog_draw(void) {

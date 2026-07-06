@@ -125,7 +125,7 @@ static const char * const SHADER_GAME_VS = SHADER_SOURCE(
 
 	varying vec4 v_color;
 	varying vec2 v_uv;
-	varying float v_fog_world_y;
+	varying float v_fog_below;
 	varying float v_fog_dist;
 	uniform mat4 view;
 	uniform mat4 model;
@@ -145,9 +145,10 @@ static const char * const SHADER_GAME_VS = SHADER_SOURCE(
 		);
 		v_uv = uv / 2048.0; // ATLAS_GRID * ATLAS_SIZE
 
-		// world-space position for fog
+		// Fog inputs: how far a fragment is BELOW the camera (+Y is down, so
+		// world_y > camera_y = below) and its distance from the camera.
 		vec4 world_pos = model * vec4(pos, 1.0);
-		v_fog_world_y = world_pos.y;
+		v_fog_below = world_pos.y - camera_pos.y;
 		v_fog_dist = length(vec4(camera_pos, 1.0) - world_pos);
 	}
 );
@@ -155,11 +156,12 @@ static const char * const SHADER_GAME_VS = SHADER_SOURCE(
 static const char * const SHADER_GAME_FS = SHADER_SOURCE(
 	varying vec4 v_color;
 	varying vec2 v_uv;
-	varying float v_fog_world_y;
+	varying float v_fog_below;
 	varying float v_fog_dist;
 	uniform sampler2D texture;
 	uniform vec3 fog_color;    // per-track tint, 0..1
 	uniform float fog_enabled; // 0.0 or 1.0
+	uniform float fog_density; // per-frame: ramps up while the camera is inside a fog zone
 
 	void main(void) {
 		vec4 tex_color = texture2D(texture, v_uv);
@@ -169,11 +171,14 @@ static const char * const SHADER_GAME_FS = SHADER_SOURCE(
 		}
 		color.rgb = color.rgb * 2.0;
 
-		// Ground haze: denser at larger world Y (down low), plus a mild
-		// distance term. Constants are starting values -- tuned later.
-		float height_factor = clamp((v_fog_world_y - 0.0) / 4000.0, 0.0, 1.0);
-		float dist_factor = clamp(v_fog_dist / 48000.0, 0.0, 1.0) * 0.5;
-		float fog_amount = fog_enabled * clamp(height_factor + dist_factor, 0.0, 1.0) * 0.6;
+		// Screen-filling haze that makes you feel INSIDE the fog when in a zone:
+		// tints everything below the camera (ground) plus a distance term, all
+		// scaled by the per-frame density (0 outside zones). Camera-relative, so
+		// it works regardless of a track's absolute height.
+		float belowness = clamp(v_fog_below / 2500.0, 0.0, 1.0);
+		float dist_factor = clamp(v_fog_dist / 40000.0, 0.0, 1.0);
+		float fog_amount = fog_enabled * fog_density *
+			clamp(belowness * 0.8 + dist_factor * 0.45, 0.0, 1.0) * 0.9;
 		color.rgb = mix(color.rgb, fog_color, fog_amount);
 
 		gl_FragColor = color;
@@ -193,6 +198,7 @@ typedef struct {
 		GLuint time;
 		GLuint fog_color;
 		GLuint fog_enabled;
+		GLuint fog_density;
 	} uniform;
 	struct {
 		GLuint pos;
@@ -214,6 +220,7 @@ prg_game_t *shader_game_init(void) {
 	s->uniform.fade = glGetUniformLocation(s->program, "fade");
 	s->uniform.fog_color = glGetUniformLocation(s->program, "fog_color");
 	s->uniform.fog_enabled = glGetUniformLocation(s->program, "fog_enabled");
+	s->uniform.fog_density = glGetUniformLocation(s->program, "fog_density");
 
 	s->attribute.pos = glGetAttribLocation(s->program, "pos");
 	s->attribute.uv = glGetAttribLocation(s->program, "uv");
@@ -382,6 +389,7 @@ static GLuint atlas_texture = 0;
 static render_blend_mode_t blend_mode = RENDER_BLEND_NORMAL;
 static bool fog_enabled = true;
 static rgba_t fog_color = {128, 128, 128, 255};
+static float fog_density_val = 0.0f;
 
 static mat4_t projection_mat_2d = mat4_identity();
 static mat4_t projection_mat_bb = mat4_identity();
@@ -705,6 +713,7 @@ void render_set_view(vec3_t pos, vec3_t angles) {
 	glUniform3f(prg_game->uniform.camera_pos, pos.x, pos.y, pos.z);
 	glUniform2f(prg_game->uniform.fade, RENDER_FADEOUT_NEAR, RENDER_FADEOUT_FAR);
 	glUniform1f(prg_game->uniform.fog_enabled, fog_enabled ? 1.0f : 0.0f);
+	glUniform1f(prg_game->uniform.fog_density, fog_density_val);
 	glUniform3f(prg_game->uniform.fog_color,
 		fog_color.r / 255.0f, fog_color.g / 255.0f, fog_color.b / 255.0f);
 }
@@ -784,6 +793,10 @@ void render_set_cull_backface(bool enabled) {
 void render_set_fog(bool enabled, rgba_t color) {
 	fog_enabled = enabled;
 	fog_color = color;
+}
+
+void render_set_fog_density(float density) {
+	fog_density_val = density;
 }
 
 // Soft, GRAINY sprite texture for the fog-volume subsystem: a radial falloff

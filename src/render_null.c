@@ -57,6 +57,9 @@ void render_set_fog(bool enabled, rgba_t color) {
 	(void)enabled;
 	(void)color;
 }
+void render_set_fog_density(float density) {
+	(void)density;
+}
 
 vec3_t render_transform(vec3_t pos) {
 	return pos;
