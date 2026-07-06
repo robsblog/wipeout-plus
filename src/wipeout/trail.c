@@ -19,13 +19,14 @@
 #define TRAIL_SIZE       230.0f  // billboard size at birth (tight = light, not smoke)
 #define TRAIL_BACK       350.0f  // backward drift from the engine (u/s)
 #define TRAIL_JITTER     45.0f   // spawn spread (small = coherent streak)
-#define TRAIL_ALPHA      0.42f   // additive brightness at birth
+#define TRAIL_ALPHA      0.26f   // additive brightness at birth
 #define TRAIL_R          170     // bright cyan-white light
 #define TRAIL_G          215
 #define TRAIL_B          255
 
-// Speed gating (ship->speed = |velocity|): below MIN no trail (no standstill
-// pile-up); at/above REF the trail is full length.
+// Speed gating from per-frame movement (world units / second), computed the
+// same way for every ship (player and AI use different ->speed scales). Below
+// MIN no trail (no standstill pile-up); at/above REF the trail is full length.
 #define TRAIL_SPEED_MIN  9000.0f
 #define TRAIL_SPEED_REF  52000.0f
 
@@ -39,12 +40,15 @@ typedef struct {
 
 static trail_t trails[TRAIL_MAX];
 static float trail_spawn_acc = 0.0f;
+static vec3_t trail_prev_pos[NUM_PILOTS];
+static bool trail_prev_valid = false;
 
 void trail_init(void) {
 	for (int i = 0; i < TRAIL_MAX; i++) {
 		trails[i].life = 0.0f;
 	}
 	trail_spawn_acc = 0.0f;
+	trail_prev_valid = false;
 }
 
 static bool trail_ship_near(ship_t *ship) {
@@ -64,6 +68,21 @@ void trail_update(void) {
 		t->pos = vec3_add(t->pos, vec3_mulf(t->vel, dt));
 	}
 
+	// Per-frame world movement speed for every ship (uniform across player/AI),
+	// updated every frame regardless of the spawn interval.
+	float ship_speed[NUM_PILOTS];
+	for (int i = 0; i < NUM_PILOTS; i++) {
+		vec3_t p = g.ships[i].position;
+		if (trail_prev_valid && dt > 0.0001f) {
+			ship_speed[i] = vec3_len(vec3_sub(p, trail_prev_pos[i])) / dt;
+		}
+		else {
+			ship_speed[i] = 0.0f;
+		}
+		trail_prev_pos[i] = p;
+	}
+	trail_prev_valid = true;
+
 	trail_spawn_acc += dt;
 	if (trail_spawn_acc < TRAIL_INTERVAL) {
 		return;
@@ -77,7 +96,7 @@ void trail_update(void) {
 		}
 		// Scale with speed: no trail at a standstill (no additive pile-up),
 		// longer streak the faster you go.
-		float speed_factor = (ship->speed - TRAIL_SPEED_MIN) /
+		float speed_factor = (ship_speed[i] - TRAIL_SPEED_MIN) /
 			(TRAIL_SPEED_REF - TRAIL_SPEED_MIN);
 		if (speed_factor <= 0.0f) {
 			continue;
