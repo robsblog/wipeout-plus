@@ -11,11 +11,11 @@
 
 // --- Tuning (starting values) ------------------------------------------------
 
-#define TRAIL_MAX        512
+#define TRAIL_MAX        768
 #define TRAIL_NEAR_DIST  (RENDER_FADEOUT_NEAR * 0.6f) // only trail near/visible ships
 #define TRAIL_INTERVAL   0.014f  // seconds between spawns (per engine)
-#define TRAIL_LIFE_MIN   0.14f   // fade-out time at low speed (short streak)
-#define TRAIL_LIFE_MAX   0.55f   // fade-out time at top speed (long streak)
+#define TRAIL_LIFE_MIN   0.22f   // fade-out time at low speed (short streak)
+#define TRAIL_LIFE_MAX   1.05f   // fade-out time at top speed (long, slow-fading streak)
 #define TRAIL_SIZE       230.0f  // billboard size at birth (tight = light, not smoke)
 #define TRAIL_BACK       350.0f  // backward drift from the engine (u/s)
 #define TRAIL_JITTER     45.0f   // spawn spread (small = coherent streak)
