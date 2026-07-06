@@ -426,6 +426,7 @@ static void render_flush(void);
 
 static void render_create_fog_texture(void);
 static void render_create_glow_texture(void);
+static void render_create_trail_texture(void);
 
 void render_init(vec2i_t screen_size) {
 	#if defined(__APPLE__) && defined(__MACH__)
@@ -494,9 +495,10 @@ void render_init(vec2i_t screen_size) {
 	};
 	RENDER_NO_TEXTURE = render_texture_create(2, 2, white_pixels);
 
-	// Permanent base textures: soft fog sprite + smooth glow sprite.
+	// Permanent base textures: soft fog + smooth glow + cloudy trail sprite.
 	render_create_fog_texture();
 	render_create_glow_texture();
+	render_create_trail_texture();
 
 
 	// Backbuffer
@@ -895,6 +897,46 @@ uint16_t render_glow_texture(void) {
 	return glow_texture_index;
 }
 
+// Soft, cloud-like GRAINY sprite for the exhaust trail: a gentle radial falloff
+// (big soft body) modulated by mid-frequency fBm grain, so the streak reads as
+// a glowing vapour cloud rather than a hard dot or hard smoke. Permanent base
+// texture.
+static uint16_t trail_texture_index = 0;
+
+static void render_create_trail_texture(void) {
+	#define TRAIL_TEX_SIZE 96
+	rgba_t pixels[TRAIL_TEX_SIZE * TRAIL_TEX_SIZE];
+	float center = (TRAIL_TEX_SIZE - 1) * 0.5f;
+	float radius = TRAIL_TEX_SIZE * 0.5f;
+	for (int y = 0; y < TRAIL_TEX_SIZE; y++) {
+		for (int x = 0; x < TRAIL_TEX_SIZE; x++) {
+			float dx = x - center;
+			float dy = y - center;
+			float r = sqrtf(dx * dx + dy * dy) / radius;
+			float falloff = 1.0f - r;
+			if (falloff < 0.0f) { falloff = 0.0f; }
+			falloff = falloff * falloff; // soft, large body
+
+			float u = (float)x / TRAIL_TEX_SIZE;
+			float v = (float)y / TRAIL_TEX_SIZE;
+			float grain =
+				0.55f * fog_vnoise(u * 4.0f,  v * 4.0f,  4) +
+				0.30f * fog_vnoise(u * 8.0f,  v * 8.0f,  8) +
+				0.15f * fog_vnoise(u * 16.0f, v * 16.0f, 16);
+			float a = falloff * (0.45f + 0.7f * grain); // cloudy: keeps body, adds grain
+			if (a < 0.0f) { a = 0.0f; }
+			if (a > 1.0f) { a = 1.0f; }
+			pixels[y * TRAIL_TEX_SIZE + x] = rgba(255, 255, 255, (uint8_t)(a * 255.0f));
+		}
+	}
+	trail_texture_index = render_texture_create(TRAIL_TEX_SIZE, TRAIL_TEX_SIZE, pixels);
+	#undef TRAIL_TEX_SIZE
+}
+
+uint16_t render_trail_texture(void) {
+	return trail_texture_index;
+}
+
 
 
 vec3_t render_transform(vec3_t pos) {
@@ -1139,6 +1181,7 @@ void render_textures_reset(uint16_t len) {
 		RENDER_NO_TEXTURE = render_texture_create(2, 2, white_pixels);
 		render_create_fog_texture();
 		render_create_glow_texture();
+		render_create_trail_texture();
 		return;
 	}
 

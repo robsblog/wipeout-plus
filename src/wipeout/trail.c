@@ -11,15 +11,15 @@
 
 // --- Tuning (starting values) ------------------------------------------------
 
-#define TRAIL_MAX        768
+#define TRAIL_MAX        1200
 #define TRAIL_NEAR_DIST  (RENDER_FADEOUT_NEAR * 0.6f) // only trail near/visible ships
-#define TRAIL_INTERVAL   0.014f  // seconds between spawns (per engine)
-#define TRAIL_LIFE_MIN   0.22f   // fade-out time at low speed (short streak)
-#define TRAIL_LIFE_MAX   1.05f   // fade-out time at top speed (long, slow-fading streak)
-#define TRAIL_SIZE       230.0f  // billboard size at birth (tight = light, not smoke)
+#define TRAIL_INTERVAL   0.018f  // seconds between spawns (per engine)
+#define TRAIL_LIFE_MIN   0.45f   // fade-out time at low speed (short streak)
+#define TRAIL_LIFE_MAX   2.20f   // fade-out time at top speed (long, slow-fading streak)
+#define TRAIL_SIZE       300.0f  // billboard size at birth (soft cloud)
 #define TRAIL_BACK       350.0f  // backward drift from the engine (u/s)
-#define TRAIL_JITTER     45.0f   // spawn spread (small = coherent streak)
-#define TRAIL_ALPHA      0.26f   // additive brightness at birth
+#define TRAIL_JITTER     80.0f   // spawn spread
+#define TRAIL_ALPHA      0.20f   // additive brightness at birth (lower: longer life overlaps more)
 #define TRAIL_R          170     // bright cyan-white light
 #define TRAIL_G          215
 #define TRAIL_B          255
@@ -132,15 +132,15 @@ void trail_draw(void) {
 	render_set_depth_write(false);
 	render_set_blend_mode(RENDER_BLEND_LIGHTER);
 
-	uint16_t tex = render_glow_texture(); // smooth bright sprite -> light, not smoke
+	uint16_t tex = render_trail_texture(); // soft cloudy grainy sprite
 	for (int i = 0; i < TRAIL_MAX; i++) {
 		trail_t *t = &trails[i];
 		if (t->life <= 0.0f) {
 			continue;
 		}
-		float f = t->life / t->max_life;         // 1 at birth -> 0 at death
+		float f = t->life / t->max_life;              // 1 at birth -> 0 at death
 		float a = f * TRAIL_ALPHA;
-		int s = (int)(t->size * (0.5f + 0.5f * f)); // shrink as it fades
+		int s = (int)(t->size * (0.7f + 0.6f * (1.0f - f))); // expand as it dissipates
 		render_push_sprite(t->pos, vec2i(s, s),
 			rgba(TRAIL_R, TRAIL_G, TRAIL_B, (uint8_t)(a * 255.0f)), tex);
 	}

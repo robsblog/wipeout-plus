@@ -83,6 +83,9 @@ uint16_t render_fog_texture(void) {
 uint16_t render_glow_texture(void) {
 	return 0;
 }
+uint16_t render_trail_texture(void) {
+	return 0;
+}
 uint16_t render_texture_create(uint32_t width, uint32_t height, rgba_t *pixels) {
 	(void) width; (void) height; (void) pixels;
 	return 0;
