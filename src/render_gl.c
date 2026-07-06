@@ -416,7 +416,9 @@ static void render_flush(void);
 // 	puts(message);
 // }
 
-void render_init(vec2i_t screen_size) {	
+static void render_create_fog_texture(void);
+
+void render_init(vec2i_t screen_size) {
 	#if defined(__APPLE__) && defined(__MACH__)
 		// OSX
 		// (nothing to do here)
@@ -482,6 +484,9 @@ void render_init(vec2i_t screen_size) {
 		rgba(128,128,128,255), rgba(128,128,128,255)
 	};
 	RENDER_NO_TEXTURE = render_texture_create(2, 2, white_pixels);
+
+	// Permanent base texture: soft fog sprite (see render_fog_texture).
+	render_create_fog_texture();
 
 
 	// Backbuffer
@@ -781,17 +786,16 @@ void render_set_fog(bool enabled, rgba_t color) {
 	fog_color = color;
 }
 
-// Lazily create a soft radial-gradient sprite texture used by the fog-volume
-// subsystem. White (neutral 128) RGB, alpha falls off quadratically toward the
-// edge so overlapping puffs blend without hard sprite borders. Created once.
-uint16_t render_fog_texture(void) {
-	#define FOG_TEX_SIZE 64
-	static uint16_t fog_texture_index = 0;
-	static bool created = false;
-	if (created) {
-		return fog_texture_index;
-	}
+// Soft radial-gradient sprite texture used by the fog-volume subsystem. White
+// (neutral 128) RGB, alpha falls off quadratically toward the edge so
+// overlapping puffs blend without hard sprite borders. Created once as a
+// permanent base texture (see render_create_fog_texture) so its index stays
+// below global_textures_len and survives track reloads / texture resets --
+// otherwise a stale high index aborts render_push_sprite ("Invalid texture").
+static uint16_t fog_texture_index = 0;
 
+static void render_create_fog_texture(void) {
+	#define FOG_TEX_SIZE 64
 	rgba_t pixels[FOG_TEX_SIZE * FOG_TEX_SIZE];
 	float center = (FOG_TEX_SIZE - 1) * 0.5f;
 	float radius = FOG_TEX_SIZE * 0.5f;
@@ -808,9 +812,11 @@ uint16_t render_fog_texture(void) {
 		}
 	}
 	fog_texture_index = render_texture_create(FOG_TEX_SIZE, FOG_TEX_SIZE, pixels);
-	created = true;
-	return fog_texture_index;
 	#undef FOG_TEX_SIZE
+}
+
+uint16_t render_fog_texture(void) {
+	return fog_texture_index;
 }
 
 
@@ -1055,6 +1061,7 @@ void render_textures_reset(uint16_t len) {
 			rgba(128,128,128,255), rgba(128,128,128,255)
 		};
 		RENDER_NO_TEXTURE = render_texture_create(2, 2, white_pixels);
+		render_create_fog_texture();
 		return;
 	}
 
