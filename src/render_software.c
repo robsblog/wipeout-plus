@@ -211,6 +211,21 @@ void render_set_fog(bool enabled, rgba_t color) {
 void render_set_fog_density(float density) {
 	(void)density;
 }
+void render_ship_sheen_upload(ship_sheen_vertex_t *verts, int count) {
+	(void)verts; (void)count;
+}
+void render_ship_sheen_begin(void) {}
+void render_ship_sheen_draw(mat4_t *model, int first_vertex, int vertex_count) {
+	(void)model; (void)first_vertex; (void)vertex_count;
+}
+void render_ship_sheen_end(void) {}
+void render_set_ship_sheen(bool enabled) {
+	(void)enabled;
+}
+vec2i_t render_atlas_offset(uint16_t texture_index) {
+	(void)texture_index;
+	return vec2i(0, 0);
+}
 uint16_t render_fog_texture(void) {
 	return RENDER_NO_TEXTURE;
 }

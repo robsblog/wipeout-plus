@@ -118,6 +118,7 @@ void race_update(void) {
 	render_set_cull_backface(true);
 
 	ships_draw();
+	ships_draw_sheen();
 	droid_draw(&g.droid);
 	weapons_draw();
 	particles_draw();

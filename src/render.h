@@ -30,6 +30,12 @@ typedef struct {
 	vec3_t normal;
 } shimmer_vertex_t;
 
+typedef struct {
+	vec3_t pos;
+	vec3_t normal;
+	vec2_t uv;
+} ship_sheen_vertex_t;
+
 #define RENDER_USE_MIPMAPS 1
 
 #define RENDER_FADEOUT_NEAR 48000.0
@@ -70,6 +76,12 @@ void render_track_shimmer_begin(void);
 void render_track_shimmer_draw_range(int first_vertex, int vertex_count);
 void render_track_shimmer_end(void);
 void render_set_metallic_shimmer(bool enabled);
+void render_ship_sheen_upload(ship_sheen_vertex_t *verts, int count);
+void render_ship_sheen_begin(void);
+void render_ship_sheen_draw(mat4_t *model, int first_vertex, int vertex_count);
+void render_ship_sheen_end(void);
+void render_set_ship_sheen(bool enabled);
+vec2i_t render_atlas_offset(uint16_t texture_index);
 void render_env_cube_capture(void (*draw_env)(void));
 void render_push_2d(vec2i_t pos, vec2i_t size, rgba_t color, uint16_t texture);
 void render_push_2d_tile(vec2i_t pos, vec2i_t uv_offset, vec2i_t uv_size, vec2i_t size, rgba_t color, uint16_t texture_index);
